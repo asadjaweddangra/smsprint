@@ -16,111 +16,106 @@
 <div class="small">If Arrowhead doesn’t open automatically, tap below.</div>
 
 <a id="printBtn" href="#" class="btn">Tap to Print</a>
-
 <div id="debugText" class="debug">Initializing…</div>
 
 <script>
-  function getZplFromHash() {
-    const hash = window.location.hash || "";
-    const match = hash.match(/zpl=([^&]+)/);
-    return match && match[1] ? match[1] : "";
+  function parseHashParams() {
+    const h = (window.location.hash || "").replace(/^#/, "");
+    const params = {};
+    h.split("&").forEach(part => {
+      const [k, v] = part.split("=");
+      if (!k) return;
+      params[decodeURIComponent(k)] = decodeURIComponent(v || "");
+    });
+    return params;
   }
 
-  function sanitizeZpl(zpl) {
-    zpl = zpl.replace(/^\uFEFF/, "");       // Remove BOM
-    zpl = zpl.replace(/\u00A0/g, " ");      // Replace NBSP
-    zpl = zpl.replace(/[^\x00-\x7F]/g, ""); // Strip non-ASCII
-    return zpl.trim();
+  function sanitizeAscii(s) {
+    if (!s) return "";
+    s = s.replace(/^\uFEFF/, "");
+    s = s.replace(/\u00A0/g, " ");
+    s = s.replace(/[^\x00-\x7F]/g, "");
+    return s.trim();
   }
 
-  function debugHex(str) {
-    return Array.from(str.slice(0, 30))
-      .map(c => c.charCodeAt(0).toString(16).padStart(2,'0'))
-      .join(" ");
+  function buildZplFromFields(name, dob, code, copies) {
+    name = sanitizeAscii(name);
+    dob = sanitizeAscii(dob);
+    code = sanitizeAscii(code).replace(/\s+/g, "");
+
+    const qty = Math.max(1, Math.min(10, parseInt(copies || "1", 10) || 1));
+
+    // Simple ZPL label with barcode
+    return (
+      "^XA" +
+      "^PW406^LL300" +
+      "^FO20,20^A0N,32,32^FD" + name + "^FS" +
+      "^FO20,60^A0N,28,28^FDDOB: " + dob + "^FS" +
+      "^FO20,110^BY2,2,80^BCN,80,Y,N,N^FD" + code + "^FS" +
+      "^PQ" + qty + ",0,1,N" +
+      "^XZ\r\n"
+    );
   }
 
-  // Prevent repeated launches for the same ZPL hash
-  function shouldLaunch(hash) {
-    const last = sessionStorage.getItem("lastHash");
-    if (last === hash) return false;
-    sessionStorage.setItem("lastHash", hash);
-    return true;
+  function getZplFromUrlOrFields() {
+    const params = parseHashParams();
+
+    // If #zpl= exists, use it (legacy mode)
+    if (params.zpl) {
+      let zpl = params.zpl;
+      zpl = sanitizeAscii(zpl);
+      if (!zpl.includes("^XA")) return { error: "❌ Provided ZPL missing ^XA." };
+      if (!zpl.endsWith("^XZ")) zpl += "^XZ";
+      zpl += "\r\n";
+      return { zpl, mode: "zpl" };
+    }
+
+    // New mode: build from short fields
+    const name = params.name || "TEST PATIENT";
+    const dob  = params.dob  || "01/01/1990";
+    const code = params.code || "1234567890";
+    const copies = params.copies || "1";
+
+    const zpl = buildZplFromFields(name, dob, code, copies);
+    return { zpl, mode: "fields" };
   }
 
-  function buildDeepLink() {
-    const rawZplEncoded = getZplFromHash();
-    if (!rawZplEncoded) return { error: "❌ No ZPL data found in URL (#zpl=...)" };
+  function run() {
+    const result = getZplFromUrlOrFields();
+    if (result.error) {
+      document.getElementById("debugText").innerText = result.error;
+      return;
+    }
 
-    let rawZpl = "";
-    try { rawZpl = decodeURIComponent(rawZplEncoded); }
-    catch(e) { rawZpl = rawZplEncoded; }
-
-    rawZpl = sanitizeZpl(rawZpl);
-
-    if (!rawZpl.includes("^XA")) return { error: "❌ ZPL missing ^XA. Data looks corrupted:\n\n" + rawZpl };
-
-    if (!rawZpl.endsWith("^XZ")) rawZpl += "^XZ";
-    rawZpl += "\r\n"; // flush job
-
-    const base64Zpl = btoa(rawZpl);
-
-    // Cache buster so Arrowhead/iOS treat each print as unique
+    const zpl = result.zpl;
+    const base64 = btoa(zpl);
     const t = Date.now();
 
     const backToAsana = encodeURIComponent("asana://");
 
     const deepLink =
       "arrowhead://x-callback-url/zplcode" +
-      "?code=" + encodeURIComponent(base64Zpl) +
+      "?code=" + encodeURIComponent(base64) +
       "&x-success=" + backToAsana +
       "&x-error=" + backToAsana +
       "&t=" + t;
 
-    return { rawZpl, base64Zpl, deepLink };
-  }
-
-  function attemptLaunch(deepLink) {
-    // Most reliable navigation method for iOS
-    window.location.replace(deepLink);
-  }
-
-  function run(auto = true) {
-    const hash = window.location.hash || "";
-    const result = buildDeepLink();
-
-    if (result.error) {
-      document.getElementById("debugText").innerText = result.error;
-      return;
-    }
-
-    // Update button always
     const btn = document.getElementById("printBtn");
-    btn.href = result.deepLink;
+    btn.href = deepLink;
 
-    // Debug output
     document.getElementById("debugText").innerText =
-      "✅ ZPL (first 120 chars):\n" + result.rawZpl.slice(0, 120) + "\n\n" +
-      "✅ HEX (first 30 chars):\n" + debugHex(result.rawZpl) + "\n\n" +
-      "✅ Base64 (first 25 chars):\n" + result.base64Zpl.slice(0, 25) + "\n\n" +
-      "✅ Deep Link:\n" + result.deepLink;
+      "✅ Mode: " + result.mode + "\n\n" +
+      "✅ ZPL Preview:\n" + zpl.slice(0, 160) + "\n\n" +
+      "✅ Copies: " + (parseHashParams().copies || "1") + "\n\n" +
+      "✅ Deep Link:\n" + deepLink;
 
-    // Only auto-launch once per unique hash
-    if (!auto) return;
-    if (!shouldLaunch(hash)) return;
-
-    // Multi-attempt strategy (best for latest iOS)
-    setTimeout(() => attemptLaunch(result.deepLink), 200);
-    setTimeout(() => attemptLaunch(result.deepLink), 900);
+    // Auto launch
+    setTimeout(() => window.location.replace(deepLink), 250);
   }
 
-  // 1) First load
-  window.addEventListener("load", () => run(true));
-
-  // 2) When returning from Arrowhead (bfcache)
-  window.addEventListener("pageshow", () => run(true));
-
-  // 3) If a new Asana link is clicked in same Safari tab
-  window.addEventListener("hashchange", () => run(true));
+  window.addEventListener("load", run);
+  window.addEventListener("pageshow", run);
+  window.addEventListener("hashchange", run);
 </script>
 
 </body>
