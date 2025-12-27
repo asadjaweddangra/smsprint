@@ -5,19 +5,19 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     body { font-family: -apple-system, sans-serif; text-align: center; padding: 40px 20px; }
-    .btn { display: inline-block; padding: 20px 40px; margin-top: 30px; background: #28a745; color: white; text-decoration: none; border-radius: 8px; font-size: 20px; font-weight: bold; }
-    .debug { margin-top:20px; font-size: 12px; color: #333; word-break: break-all; text-align:left; background:#f7f7f7; padding:15px; border-radius:8px;}
+    .btn { display: inline-block; padding: 18px 36px; margin-top: 22px; background: #28a745; color: white; text-decoration: none; border-radius: 10px; font-size: 18px; font-weight: 700; }
+    .debug { margin-top:20px; font-size: 12px; color: #333; word-break: break-all; text-align:left; background:#f7f7f7; padding:15px; border-radius:10px;}
     .small { font-size: 14px; color: #666; margin-top: 12px; }
   </style>
 </head>
 <body>
 
-<h3>🖨️ Printing...</h3>
-<div class="small">If nothing happens, tap the button below.</div>
+<h3>🖨️ Printing…</h3>
+<div class="small">If Arrowhead doesn’t open automatically, tap below.</div>
 
 <a id="printBtn" href="#" class="btn">Tap to Print</a>
 
-<div id="debugText" class="debug">Initializing...</div>
+<div id="debugText" class="debug">Initializing…</div>
 
 <script>
   function getZplFromHash() {
@@ -27,9 +27,9 @@
   }
 
   function sanitizeZpl(zpl) {
-    zpl = zpl.replace(/^\uFEFF/, "");      // Remove BOM
-    zpl = zpl.replace(/\u00A0/g, " ");     // Replace non-breaking spaces
-    zpl = zpl.replace(/[^\x00-\x7F]/g, "");// Strip non-ASCII
+    zpl = zpl.replace(/^\uFEFF/, "");       // Remove BOM
+    zpl = zpl.replace(/\u00A0/g, " ");      // Replace NBSP
+    zpl = zpl.replace(/[^\x00-\x7F]/g, ""); // Strip non-ASCII
     return zpl.trim();
   }
 
@@ -39,77 +39,88 @@
       .join(" ");
   }
 
-  function buildAndPrint() {
-    let rawZplEncoded = getZplFromHash();
+  // Prevent repeated launches for the same ZPL hash
+  function shouldLaunch(hash) {
+    const last = sessionStorage.getItem("lastHash");
+    if (last === hash) return false;
+    sessionStorage.setItem("lastHash", hash);
+    return true;
+  }
 
-    if (!rawZplEncoded) {
-      document.getElementById("debugText").innerText =
-        "❌ No ZPL data found in URL. Make sure you have #zpl=...";
-      return;
-    }
+  function buildDeepLink() {
+    const rawZplEncoded = getZplFromHash();
+    if (!rawZplEncoded) return { error: "❌ No ZPL data found in URL (#zpl=...)" };
 
-    // Decode ZPL
     let rawZpl = "";
     try { rawZpl = decodeURIComponent(rawZplEncoded); }
     catch(e) { rawZpl = rawZplEncoded; }
 
     rawZpl = sanitizeZpl(rawZpl);
 
-    if (!rawZpl.includes("^XA")) {
-      document.getElementById("debugText").innerText =
-        "❌ ZPL missing ^XA (corrupt data):\n\n" + rawZpl;
+    if (!rawZpl.includes("^XA")) return { error: "❌ ZPL missing ^XA. Data looks corrupted:\n\n" + rawZpl };
+
+    if (!rawZpl.endsWith("^XZ")) rawZpl += "^XZ";
+    rawZpl += "\r\n"; // flush job
+
+    const base64Zpl = btoa(rawZpl);
+
+    // Cache buster so Arrowhead/iOS treat each print as unique
+    const t = Date.now();
+
+    const backToAsana = encodeURIComponent("asana://");
+
+    const deepLink =
+      "arrowhead://x-callback-url/zplcode" +
+      "?code=" + encodeURIComponent(base64Zpl) +
+      "&x-success=" + backToAsana +
+      "&x-error=" + backToAsana +
+      "&t=" + t;
+
+    return { rawZpl, base64Zpl, deepLink };
+  }
+
+  function attemptLaunch(deepLink) {
+    // Most reliable navigation method for iOS
+    window.location.replace(deepLink);
+  }
+
+  function run(auto = true) {
+    const hash = window.location.hash || "";
+    const result = buildDeepLink();
+
+    if (result.error) {
+      document.getElementById("debugText").innerText = result.error;
       return;
     }
 
-    // Ensure proper termination
-    if (!rawZpl.endsWith("^XZ")) rawZpl += "^XZ";
-    rawZpl += "\r\n";  // Flush job
-
-    // Base64 encode (safe because we stripped non-ASCII)
-    let base64Zpl = btoa(rawZpl);
-
-    // ✅ Cache buster so iOS/app treat every print request as unique
-    let cacheBuster = Date.now();
-
-    // ✅ Return to Asana after printing
-    let xSuccess = encodeURIComponent("asana://");
-
-    // ✅ Deep link into Arrowhead
-    let deepLink =
-      "arrowhead://x-callback-url/zplcode" +
-      "?code=" + encodeURIComponent(base64Zpl) +
-      "&x-success=" + xSuccess +
-      "&t=" + cacheBuster;
-
-    // Update button
+    // Update button always
     const btn = document.getElementById("printBtn");
-    btn.href = deepLink;
+    btn.href = result.deepLink;
 
-    // Debug info
+    // Debug output
     document.getElementById("debugText").innerText =
-      "✅ ZPL (first 120 chars):\n" + rawZpl.slice(0, 120) + "\n\n" +
-      "✅ HEX (first 30 chars):\n" + debugHex(rawZpl) + "\n\n" +
-      "✅ Base64 (first 25 chars):\n" + base64Zpl.slice(0, 25) + "\n\n" +
-      "✅ Deep Link:\n" + deepLink;
+      "✅ ZPL (first 120 chars):\n" + result.rawZpl.slice(0, 120) + "\n\n" +
+      "✅ HEX (first 30 chars):\n" + debugHex(result.rawZpl) + "\n\n" +
+      "✅ Base64 (first 25 chars):\n" + result.base64Zpl.slice(0, 25) + "\n\n" +
+      "✅ Deep Link:\n" + result.deepLink;
 
-    // ✅ Attempt auto launch (works on most iOS cases)
-    setTimeout(() => {
-      window.location.replace(deepLink);
-    }, 250);
+    // Only auto-launch once per unique hash
+    if (!auto) return;
+    if (!shouldLaunch(hash)) return;
+
+    // Multi-attempt strategy (best for latest iOS)
+    setTimeout(() => attemptLaunch(result.deepLink), 200);
+    setTimeout(() => attemptLaunch(result.deepLink), 900);
   }
 
-  // ✅ Run on first load
-  window.addEventListener("load", buildAndPrint);
+  // 1) First load
+  window.addEventListener("load", () => run(true));
 
-  // ✅ Run again if Safari restores page from cache (common after returning from app)
-  window.addEventListener("pageshow", function(e) {
-    buildAndPrint();
-  });
+  // 2) When returning from Arrowhead (bfcache)
+  window.addEventListener("pageshow", () => run(true));
 
-  // ✅ Run again if hash changes (new ZPL from a new link in Asana)
-  window.addEventListener("hashchange", function() {
-    buildAndPrint();
-  });
+  // 3) If a new Asana link is clicked in same Safari tab
+  window.addEventListener("hashchange", () => run(true));
 </script>
 
 </body>
