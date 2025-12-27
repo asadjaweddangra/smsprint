@@ -7,91 +7,109 @@
     body { font-family: -apple-system, sans-serif; text-align: center; padding: 40px 20px; }
     .btn { display: inline-block; padding: 20px 40px; margin-top: 30px; background: #28a745; color: white; text-decoration: none; border-radius: 8px; font-size: 20px; font-weight: bold; }
     .debug { margin-top:20px; font-size: 12px; color: #333; word-break: break-all; text-align:left; background:#f7f7f7; padding:15px; border-radius:8px;}
+    .small { font-size: 14px; color: #666; margin-top: 12px; }
   </style>
 </head>
 <body>
 
-<h3>🔄 Processing...</h3>
+<h3>🖨️ Printing...</h3>
+<div class="small">If nothing happens, tap the button below.</div>
 
 <a id="printBtn" href="#" class="btn">Tap to Print</a>
 
 <div id="debugText" class="debug">Initializing...</div>
 
 <script>
-function getZplFromHash() {
-  let hash = window.location.hash;
-  let match = hash.match(/zpl=([^&]+)/);
-  return match && match[1] ? match[1] : "";
-}
-
-function sanitizeZpl(zpl) {
-  // Remove BOM
-  zpl = zpl.replace(/^\uFEFF/, "");
-  // Replace non-breaking space with normal space
-  zpl = zpl.replace(/\u00A0/g, " ");
-  // Remove any non-ASCII characters
-  zpl = zpl.replace(/[^\x00-\x7F]/g, "");
-  return zpl.trim();
-}
-
-function debugHex(str) {
-  return Array.from(str.slice(0, 30))
-    .map(c => c.charCodeAt(0).toString(16).padStart(2,'0'))
-    .join(" ");
-}
-
-window.onload = function() {
-  let rawZplEncoded = getZplFromHash();
-
-  if (!rawZplEncoded) {
-    document.getElementById("debugText").innerText = "❌ No ZPL data found in URL (#zpl=...)";
-    return;
+  function getZplFromHash() {
+    const hash = window.location.hash || "";
+    const match = hash.match(/zpl=([^&]+)/);
+    return match && match[1] ? match[1] : "";
   }
 
-  // Decode URL-encoded string
-  let rawZpl = "";
-  try {
-    rawZpl = decodeURIComponent(rawZplEncoded);
-  } catch(e) {
-    rawZpl = rawZplEncoded;
+  function sanitizeZpl(zpl) {
+    zpl = zpl.replace(/^\uFEFF/, "");      // Remove BOM
+    zpl = zpl.replace(/\u00A0/g, " ");     // Replace non-breaking spaces
+    zpl = zpl.replace(/[^\x00-\x7F]/g, "");// Strip non-ASCII
+    return zpl.trim();
   }
 
-  // Sanitize
-  rawZpl = sanitizeZpl(rawZpl);
-
-  // Ensure ZPL ends properly
-  if (!rawZpl.includes("^XA")) {
-    document.getElementById("debugText").innerText = "❌ ZPL does not contain ^XA. Data looks corrupted:\n\n" + rawZpl;
-    return;
+  function debugHex(str) {
+    return Array.from(str.slice(0, 30))
+      .map(c => c.charCodeAt(0).toString(16).padStart(2,'0'))
+      .join(" ");
   }
 
-  if (!rawZpl.trim().endsWith("^XZ")) {
-    rawZpl += "^XZ";
+  function buildAndPrint() {
+    let rawZplEncoded = getZplFromHash();
+
+    if (!rawZplEncoded) {
+      document.getElementById("debugText").innerText =
+        "❌ No ZPL data found in URL. Make sure you have #zpl=...";
+      return;
+    }
+
+    // Decode ZPL
+    let rawZpl = "";
+    try { rawZpl = decodeURIComponent(rawZplEncoded); }
+    catch(e) { rawZpl = rawZplEncoded; }
+
+    rawZpl = sanitizeZpl(rawZpl);
+
+    if (!rawZpl.includes("^XA")) {
+      document.getElementById("debugText").innerText =
+        "❌ ZPL missing ^XA (corrupt data):\n\n" + rawZpl;
+      return;
+    }
+
+    // Ensure proper termination
+    if (!rawZpl.endsWith("^XZ")) rawZpl += "^XZ";
+    rawZpl += "\r\n";  // Flush job
+
+    // Base64 encode (safe because we stripped non-ASCII)
+    let base64Zpl = btoa(rawZpl);
+
+    // ✅ Cache buster so iOS/app treat every print request as unique
+    let cacheBuster = Date.now();
+
+    // ✅ Return to Asana after printing
+    let xSuccess = encodeURIComponent("asana://");
+
+    // ✅ Deep link into Arrowhead
+    let deepLink =
+      "arrowhead://x-callback-url/zplcode" +
+      "?code=" + encodeURIComponent(base64Zpl) +
+      "&x-success=" + xSuccess +
+      "&t=" + cacheBuster;
+
+    // Update button
+    const btn = document.getElementById("printBtn");
+    btn.href = deepLink;
+
+    // Debug info
+    document.getElementById("debugText").innerText =
+      "✅ ZPL (first 120 chars):\n" + rawZpl.slice(0, 120) + "\n\n" +
+      "✅ HEX (first 30 chars):\n" + debugHex(rawZpl) + "\n\n" +
+      "✅ Base64 (first 25 chars):\n" + base64Zpl.slice(0, 25) + "\n\n" +
+      "✅ Deep Link:\n" + deepLink;
+
+    // ✅ Attempt auto launch (works on most iOS cases)
+    setTimeout(() => {
+      window.location.replace(deepLink);
+    }, 250);
   }
 
-  // Add newline to flush print job
-  rawZpl += "\r\n";
+  // ✅ Run on first load
+  window.addEventListener("load", buildAndPrint);
 
-  // Base64 encode (ASCII safe after sanitization)
-  let base64Zpl = btoa(rawZpl);
+  // ✅ Run again if Safari restores page from cache (common after returning from app)
+  window.addEventListener("pageshow", function(e) {
+    buildAndPrint();
+  });
 
-  // Build deep link
-  let deepLink =
-    "arrowhead://x-callback-url/zplcode" +
-    "?code=" + encodeURIComponent(base64Zpl) +
-    "&x-success=" + encodeURIComponent("asana://");
-
-  // Update button link
-  document.getElementById("printBtn").href = deepLink;
-
-  // Debug output
-  document.getElementById("debugText").innerText =
-    "✅ Clean ZPL (first 150 chars):\n" + rawZpl.slice(0, 150) + "\n\n" +
-    "✅ HEX (first 30 chars):\n" + debugHex(rawZpl) + "\n\n" +
-    "✅ Base64 (first 50 chars):\n" + base64Zpl.slice(0, 50) + "\n\n" +
-    "✅ Base64 should start with: XlhB  (this = '^XA')\n\n" +
-    "✅ Deep Link:\n" + deepLink;
-};
+  // ✅ Run again if hash changes (new ZPL from a new link in Asana)
+  window.addEventListener("hashchange", function() {
+    buildAndPrint();
+  });
 </script>
 
 </body>
