@@ -6,22 +6,22 @@
   <style>
     body { font-family: -apple-system, sans-serif; text-align: center; padding: 40px 20px; }
     .btn { display: inline-block; padding: 20px 40px; margin-top: 30px; background: #28a745; color: white; text-decoration: none; border-radius: 8px; font-size: 20px; font-weight: bold; }
-    .debug { margin-top:20px; font-size: 12px; color: #333; word-break: break-all; text-align:left; background:#f7f7f7; padding:15px; border-radius:8px;}
+    .debug { margin-top:20px; font-size: 12px; color: #333; word-break: break-all; text-align:left; background:#f7f7f7; padding:15px; border-radius:8px; white-space: pre-wrap;}
   </style>
 </head>
 <body>
 
 <h3>🔄 Processing...</h3>
 
-<a id="printBtn" href="#" class="btn">Tap to Print</a>
+<a id="printBtn" href="#" class="btn">Tap to Print (Fallback)</a>
 
 <div id="debugText" class="debug">Initializing...</div>
 
 <script>
-function getZplFromHash() {
-  let hash = window.location.hash;
-  let match = hash.match(/zpl=([^&]+)/);
-  return match && match[1] ? match[1] : "";
+function getParamFromHash(key) {
+  let hash = window.location.hash.substring(1); // remove #
+  let params = new URLSearchParams(hash);
+  return params.get(key) || "";
 }
 
 function sanitizeZpl(zpl) {
@@ -34,64 +34,133 @@ function sanitizeZpl(zpl) {
   return zpl.trim();
 }
 
+function buildSingleLabelZpl(name, dob, barcode) {
+  return `^XA
+^PW406
+^LL300
+^FO20,20^A0N,32,32^FD${name}^FS
+^FO20,60^A0N,28,28^FDDOB: ${dob}^FS
+^FO20,110^BY2,2,80^BCN,80,Y,N,N^FD${barcode}^FS
+^XZ`;
+}
+
+function buildMultiLabelJob(name, dob, barcodes, qty) {
+  qty = parseInt(qty || "1", 10);
+  let job = "";
+
+  barcodes.forEach(bc => {
+    let zpl = buildSingleLabelZpl(name, dob, bc.trim());
+
+    if (qty > 1) {
+      // insert quantity before ^XZ
+      zpl = zpl.replace(/\^XZ$/, `^PQ${qty},0,1,Y^XZ`);
+    }
+
+    job += zpl + "\r\n";
+  });
+
+  return job;
+}
+
 function debugHex(str) {
-  return Array.from(str.slice(0, 30))
+  return Array.from(str.slice(0, 40))
     .map(c => c.charCodeAt(0).toString(16).padStart(2,'0'))
     .join(" ");
 }
 
-window.onload = function() {
-  let rawZplEncoded = getZplFromHash();
+function processAndPrint() {
+  let callback = getParamFromHash("cb") || "asana://";
+  let qty = getParamFromHash("qty") || "1";
 
-  if (!rawZplEncoded) {
-    document.getElementById("debugText").innerText = "❌ No ZPL data found in URL (#zpl=...)";
+  // MODE 1 (legacy): full ZPL passed in hash
+  let zplRaw = getParamFromHash("zpl");
+
+  // MODE 2 (recommended): name/dob + barcodes
+  let name = getParamFromHash("name");
+  let dob  = getParamFromHash("dob");
+  let bcList = getParamFromHash("bc");
+
+  let finalZpl = "";
+
+  if (zplRaw) {
+    // Legacy mode: ZPL already provided
+    let decoded = "";
+    try { decoded = decodeURIComponent(zplRaw); }
+    catch(e) { decoded = zplRaw; }
+
+    finalZpl = decoded.trim();
+
+    if (!finalZpl.includes("^XA")) {
+      document.getElementById("debugText").innerText =
+        "❌ ZPL missing ^XA. Corrupted:\n\n" + finalZpl;
+      return;
+    }
+
+    if (!finalZpl.trim().endsWith("^XZ")) {
+      finalZpl += "^XZ";
+    }
+
+    // Apply qty to entire job
+    if (parseInt(qty, 10) > 1) {
+      finalZpl = finalZpl.replace(/\^XZ$/, `^PQ${qty},0,1,Y^XZ`);
+    }
+
+    finalZpl += "\r\n";
+
+  } else if (name && dob && bcList) {
+    // Recommended mode
+    let decodedName = decodeURIComponent(name);
+    let decodedDob  = decodeURIComponent(dob);
+    let decodedBcList = decodeURIComponent(bcList);
+
+    let barcodes = decodedBcList.split("|");
+    finalZpl = buildMultiLabelJob(decodedName, decodedDob, barcodes, qty);
+  } else {
+    document.getElementById("debugText").innerText =
+      "❌ Missing data.\n\nProvide either:\n\n" +
+      "#zpl=...\n\nOR\n\n" +
+      "#name=...&dob=...&bc=111|222|333\n\n" +
+      "Optional: &qty=2 and &cb=asana://";
     return;
   }
 
-  // Decode URL-encoded string
-  let rawZpl = "";
-  try {
-    rawZpl = decodeURIComponent(rawZplEncoded);
-  } catch(e) {
-    rawZpl = rawZplEncoded;
-  }
+  // Sanitize + ensure ASCII safe for Base64
+  finalZpl = sanitizeZpl(finalZpl) + "\r\n";
 
-  // Sanitize
-  rawZpl = sanitizeZpl(rawZpl);
+  // Base64 encode
+  let base64Zpl = btoa(finalZpl);
 
-  // Ensure ZPL ends properly
-  if (!rawZpl.includes("^XA")) {
-    document.getElementById("debugText").innerText = "❌ ZPL does not contain ^XA. Data looks corrupted:\n\n" + rawZpl;
-    return;
-  }
-
-  if (!rawZpl.trim().endsWith("^XZ")) {
-    rawZpl += "^XZ";
-  }
-
-  // Add newline to flush print job
-  rawZpl += "\r\n";
-
-  // Base64 encode (ASCII safe after sanitization)
-  let base64Zpl = btoa(rawZpl);
-
-  // Build deep link
+  // Build deep link to Mobiprint/Arrowhead
   let deepLink =
     "arrowhead://x-callback-url/zplcode" +
     "?code=" + encodeURIComponent(base64Zpl) +
-    "&x-success=" + encodeURIComponent("asana://");
+    "&x-success=" + encodeURIComponent(callback);
 
-  // Update button link
+  // Update fallback button
   document.getElementById("printBtn").href = deepLink;
 
   // Debug output
   document.getElementById("debugText").innerText =
-    "✅ Clean ZPL (first 150 chars):\n" + rawZpl.slice(0, 150) + "\n\n" +
-    "✅ HEX (first 30 chars):\n" + debugHex(rawZpl) + "\n\n" +
-    "✅ Base64 (first 50 chars):\n" + base64Zpl.slice(0, 50) + "\n\n" +
-    "✅ Base64 should start with: XlhB  (this = '^XA')\n\n" +
+    "✅ Ready to print\n\n" +
+    "Qty per barcode: " + qty + "\n\n" +
+    "✅ ZPL Preview (first 250 chars):\n" + finalZpl.slice(0, 250) + "...\n\n" +
+    "✅ HEX (first 40 chars):\n" + debugHex(finalZpl) + "\n\n" +
+    "✅ Base64 (first 60 chars):\n" + base64Zpl.slice(0, 60) + "...\n\n" +
     "✅ Deep Link:\n" + deepLink;
-};
+
+  // ✅ Auto-launch deep link (minimal clicks)
+  setTimeout(() => {
+    window.location.href = deepLink;
+  }, 200);
+
+  // ✅ Remove PHI from address bar after attempt
+  setTimeout(() => {
+    history.replaceState(null, "", window.location.pathname);
+  }, 2000);
+}
+
+window.onload = processAndPrint;
+window.onhashchange = processAndPrint;
 </script>
 
 </body>
