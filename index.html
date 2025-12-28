@@ -5,50 +5,19 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     body { font-family: -apple-system, sans-serif; text-align: center; padding: 40px 20px; }
-    .btn {
-      display: none; /* hidden by default */
-      padding: 20px 40px;
-      margin-top: 30px;
-      background: #28a745;
-      color: white;
-      text-decoration: none;
-      border-radius: 8px;
-      font-size: 20px;
-      font-weight: bold;
-    }
-    .debug {
-      margin-top: 20px;
-      font-size: 12px;
-      color: #333;
-      word-break: break-all;
-      text-align: left;
-      background: #f7f7f7;
-      padding: 15px;
-      border-radius: 8px;
-      white-space: pre-wrap;
-    }
-    .hint {
-      margin-top: 10px;
-      font-size: 13px;
-      color: #666;
-      line-height: 1.4;
-    }
+    .btn { display:none; padding: 20px 40px; margin-top: 30px; background: #28a745; color: white; text-decoration: none; border-radius: 8px; font-size: 20px; font-weight: bold; }
+    .debug { margin-top:20px; font-size: 12px; color: #333; word-break: break-all; text-align:left; background:#f7f7f7; padding:15px; border-radius:8px; white-space: pre-wrap;}
+    .hint { margin-top:10px; font-size: 13px; color:#666; }
   </style>
 </head>
 <body>
 
 <h3 id="statusTitle">🔄 Processing...</h3>
-
 <a id="printBtn" href="#" class="btn">Tap to Print</a>
 <div id="hintText" class="hint"></div>
-
 <div id="debugText" class="debug">Initializing...</div>
 
 <script>
-/* ---------------------------
-   Helpers
----------------------------- */
-
 function getParamFromHash(key) {
   let hash = window.location.hash.substring(1);
   let params = new URLSearchParams(hash);
@@ -56,16 +25,10 @@ function getParamFromHash(key) {
 }
 
 function sanitizeZpl(zpl) {
-  zpl = zpl.replace(/^\uFEFF/, "");       // Remove BOM
-  zpl = zpl.replace(/\u00A0/g, " ");      // Replace non-breaking space
-  zpl = zpl.replace(/[^\x00-\x7F]/g, ""); // Remove non-ASCII
+  zpl = zpl.replace(/^\uFEFF/, "");
+  zpl = zpl.replace(/\u00A0/g, " ");
+  zpl = zpl.replace(/[^\x00-\x7F]/g, "");
   return zpl.trim();
-}
-
-function debugHex(str) {
-  return Array.from(str.slice(0, 40))
-    .map(c => c.charCodeAt(0).toString(16).padStart(2,'0'))
-    .join(" ");
 }
 
 function buildSingleLabelZpl(name, dob, barcode, qty) {
@@ -79,231 +42,110 @@ function buildSingleLabelZpl(name, dob, barcode, qty) {
 ^FO20,60^A0N,28,28^FDDOB: ${dob}^FS
 ^FO20,110^BY2,2,80^BCN,80,Y,N,N^FD${barcode}^FS`;
 
-  if (qty > 1) {
-    zpl += `\n^PQ${qty},0,1,Y`;
-  }
-
+  if (qty > 1) zpl += `\n^PQ${qty},0,1,Y`;
   zpl += `\n^XZ`;
   return zpl;
 }
 
-/**
- * items format: "BARCODE*QTY|BARCODE*QTY|BARCODE"
- * qty optional: if not present, defaults to 1
- * Example: "111*1|222*3|333*2"
- */
 function parseItems(itemsStr) {
   let decoded = decodeURIComponent(itemsStr || "").trim();
   if (!decoded) return [];
-
   return decoded.split("|").map(part => {
     let [barcode, qty] = part.split("*");
     barcode = (barcode || "").trim();
     qty = (qty || "1").trim();
-
     if (!barcode) return null;
     return { barcode, qty };
   }).filter(Boolean);
 }
 
-/* ---------------------------
-   Deep-link UX logic
----------------------------- */
+let fallbackBtnTimer, mobiprintTimer;
 
-// timers / state
-let fallbackTimer = null;
-let clearPhiTimer = null;
-let returnTimer = null;
-let lastDeepLink = "";
-let returnApp = "asana://";
-let hasAttempted = false;
-
-// Show fallback print button (ONLY when needed)
-function showFallbackButton(deepLink) {
+function showFallback(deepLink) {
   const btn = document.getElementById("printBtn");
   btn.href = deepLink;
   btn.style.display = "inline-block";
-
   document.getElementById("statusTitle").innerText = "⚠️ Tap to Print";
   document.getElementById("hintText").innerText =
-    "If Mobiprint didn’t open automatically, tap the button above.";
+    "If printing didn’t open automatically, tap the button.";
 }
 
-// Hide fallback button (default state)
-function hideFallbackButton() {
-  const btn = document.getElementById("printBtn");
-  btn.style.display = "none";
+function process() {
+  if (fallbackBtnTimer) clearTimeout(fallbackBtnTimer);
+  if (mobiprintTimer) clearTimeout(mobiprintTimer);
+
+  document.getElementById("printBtn").style.display = "none";
   document.getElementById("hintText").innerText = "";
-}
-
-// Best-effort return + close
-function returnToAsanaAndClose() {
-  try {
-    // attempt to close (works only in limited cases)
-    window.close();
-  } catch(e) {}
-
-  // always attempt to go back to Asana
-  if (returnApp) {
-    window.location.href = returnApp;
-  }
-}
-
-// Called when we come back to Safari (visibility restored)
-function handleVisibilityReturn() {
-  // If we previously launched a deep link, and user is back now, return to Asana
-  if (hasAttempted) {
-    // slight delay so Safari settles
-    setTimeout(() => {
-      returnToAsanaAndClose();
-    }, 200);
-  }
-}
-
-/* ---------------------------
-   Main processing
----------------------------- */
-
-function processAndPrint() {
-  // reset timers + UI
-  if (fallbackTimer) clearTimeout(fallbackTimer);
-  if (clearPhiTimer) clearTimeout(clearPhiTimer);
-  if (returnTimer) clearTimeout(returnTimer);
-
-  hideFallbackButton();
-  hasAttempted = false;
-
   document.getElementById("statusTitle").innerText = "🔄 Processing...";
-  document.getElementById("debugText").innerText = "Processing hash params...";
 
-  // callback app
-  returnApp = getParamFromHash("cb") || "asana://";
-
-  // MODE A (legacy): full ZPL passed
-  let zplRaw = getParamFromHash("zpl");
-
-  // MODE B (recommended): name + dob + items with per-label qty
   let name = getParamFromHash("name");
-  let dob  = getParamFromHash("dob");
+  let dob = getParamFromHash("dob");
   let itemsStr = getParamFromHash("items");
+  let cb = getParamFromHash("cb") || "asana://";
 
-  let finalZpl = "";
-
-  if (zplRaw) {
-    // Legacy mode
-    let decoded = "";
-    try { decoded = decodeURIComponent(zplRaw); }
-    catch(e) { decoded = zplRaw; }
-
-    finalZpl = decoded.trim();
-    if (!finalZpl.includes("^XA")) {
-      document.getElementById("statusTitle").innerText = "❌ Invalid Data";
-      document.getElementById("debugText").innerText =
-        "❌ ZPL missing ^XA. Corrupted:\n\n" + finalZpl;
-      return;
-    }
-    if (!finalZpl.trim().endsWith("^XZ")) finalZpl += "^XZ";
-    finalZpl += "\r\n";
-
-  } else if (name && dob && itemsStr) {
-    // New mode
-    let decodedName = decodeURIComponent(name);
-    let decodedDob  = decodeURIComponent(dob);
-    let items = parseItems(itemsStr);
-
-    if (!items.length) {
-      document.getElementById("statusTitle").innerText = "❌ Invalid Data";
-      document.getElementById("debugText").innerText =
-        "❌ items= missing or invalid.\n\nExample:\nitems=111*1|222*3|333*2";
-      return;
-    }
-
-    finalZpl = items.map(item =>
-      buildSingleLabelZpl(decodedName, decodedDob, item.barcode, item.qty)
-    ).join("\r\n") + "\r\n";
-
-  } else {
+  if (!name || !dob || !itemsStr) {
     document.getElementById("statusTitle").innerText = "❌ Missing Data";
     document.getElementById("debugText").innerText =
-      "❌ Missing data.\n\nProvide either:\n\n" +
-      "#zpl=...\n\nOR\n\n" +
-      "#name=...&dob=...&items=111*1|222*3|333*2\n\n" +
-      "Optional: &cb=asana://";
+      "Provide:\n#name=...&dob=...&items=111*1|222*3&cb=asana://";
     return;
   }
 
-  // Sanitize for Base64
+  let decodedName = decodeURIComponent(name);
+  let decodedDob = decodeURIComponent(dob);
+  let items = parseItems(itemsStr);
+
+  let finalZpl = items.map(item =>
+    buildSingleLabelZpl(decodedName, decodedDob, item.barcode, item.qty)
+  ).join("\r\n") + "\r\n";
+
   finalZpl = sanitizeZpl(finalZpl) + "\r\n";
   let base64Zpl = btoa(finalZpl);
 
-  // Deep link to Mobiprint / Arrowhead with x-success return to Asana
-  let deepLink =
+  let mobiprintDeepLink =
     "arrowhead://x-callback-url/zplcode" +
     "?code=" + encodeURIComponent(base64Zpl) +
-    "&x-success=" + encodeURIComponent(returnApp);
+    "&x-success=" + encodeURIComponent(cb) +
+    "&x-error=" + encodeURIComponent(cb) +
+    "&x-cancel=" + encodeURIComponent(cb);
 
-  lastDeepLink = deepLink;
+  // Build Shortcut URL (payload = your same query string)
+  let payload = `name=${encodeURIComponent(decodedName)}&dob=${encodeURIComponent(decodedDob)}&items=${encodeURIComponent(decodeURIComponent(itemsStr))}&cb=${encodeURIComponent(cb)}`;
 
-  // Debug output
+  let shortcutURL =
+    "shortcuts://run-shortcut" +
+    "?name=" + encodeURIComponent("SMS Print") +
+    "&input=text" +
+    "&text=" + encodeURIComponent(payload);
+
   document.getElementById("debugText").innerText =
-    "✅ Ready\n\n" +
-    "✅ ZPL Preview (first 250 chars):\n" + finalZpl.slice(0, 250) + "...\n\n" +
-    "✅ HEX (first 40 chars):\n" + debugHex(finalZpl) + "\n\n" +
-    "✅ Base64 (first 60 chars):\n" + base64Zpl.slice(0, 60) + "...\n\n" +
-    "✅ Deep Link:\n" + deepLink;
+    "✅ Shortcut URL:\n" + shortcutURL + "\n\n" +
+    "✅ Mobiprint URL:\n" + mobiprintDeepLink;
 
-  // Attempt auto-launch deep link
-  hasAttempted = true;
-  document.getElementById("statusTitle").innerText = "🚀 Launching Mobiprint...";
+  document.getElementById("statusTitle").innerText = "🚀 Launching...";
 
-  // --- Deep link attempt
-  // Use location.href (best for iOS deep links)
+  // 1) Try Shortcut first
   setTimeout(() => {
-    window.location.href = deepLink;
+    window.location.href = shortcutURL;
   }, 150);
 
-  // --- Fallback detection:
-  // If Mobiprint didn't open, the page stays visible.
-  // We show the button only then.
-  fallbackTimer = setTimeout(() => {
-    // If we are still visible, likely the deep link did not open.
-    // (If deep link worked, Safari likely went background)
-    if (!document.hidden) {
-      showFallbackButton(deepLink);
-    }
-  }, 1200);
+  // 2) If Shortcut didn't open, try Mobiprint
+  mobiprintTimer = setTimeout(() => {
+    window.location.href = mobiprintDeepLink;
+  }, 900);
 
-  // --- PHI reduction:
-  // Clear the URL fragment so it's not left in Safari address bar.
-  clearPhiTimer = setTimeout(() => {
+  // 3) If Mobiprint didn't open, show fallback button
+  fallbackBtnTimer = setTimeout(() => {
+    showFallback(mobiprintDeepLink);
+  }, 1400);
+
+  // 4) Clear PHI from address bar
+  setTimeout(() => {
     history.replaceState(null, "", window.location.pathname);
   }, 1800);
-
-  // --- Return to Asana backup:
-  // If x-success fails (or app doesn't call back), when the user returns to Safari,
-  // visibility handler returns to Asana. But we also do a timed fallback.
-  returnTimer = setTimeout(() => {
-    // If user is still on the page after a while, attempt return anyway
-    if (!document.hidden) {
-      returnToAsanaAndClose();
-    }
-  }, 8000);
 }
 
-/* ---------------------------
-   Events
----------------------------- */
-
-// Handle Safari tab reuse and new hash loads
-window.onload = processAndPrint;
-window.onhashchange = processAndPrint;
-
-// When we come back from Mobiprint, iOS will trigger visibilitychange
-document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) {
-    handleVisibilityReturn();
-  }
-});
+window.onload = process;
+window.onhashchange = process;
 </script>
 
 </body>
