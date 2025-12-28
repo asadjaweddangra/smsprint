@@ -19,47 +19,16 @@
 
 <script>
 function getParamFromHash(key) {
-  let hash = window.location.hash.substring(1); // remove #
+  let hash = window.location.hash.substring(1);
   let params = new URLSearchParams(hash);
   return params.get(key) || "";
 }
 
 function sanitizeZpl(zpl) {
-  // Remove BOM
-  zpl = zpl.replace(/^\uFEFF/, "");
-  // Replace non-breaking space with normal space
-  zpl = zpl.replace(/\u00A0/g, " ");
-  // Remove any non-ASCII characters
-  zpl = zpl.replace(/[^\x00-\x7F]/g, "");
+  zpl = zpl.replace(/^\uFEFF/, "");       // Remove BOM
+  zpl = zpl.replace(/\u00A0/g, " ");      // Replace non-breaking space
+  zpl = zpl.replace(/[^\x00-\x7F]/g, ""); // Remove non-ASCII
   return zpl.trim();
-}
-
-function buildSingleLabelZpl(name, dob, barcode) {
-  return `^XA
-^PW406
-^LL300
-^FO20,20^A0N,32,32^FD${name}^FS
-^FO20,60^A0N,28,28^FDDOB: ${dob}^FS
-^FO20,110^BY2,2,80^BCN,80,Y,N,N^FD${barcode}^FS
-^XZ`;
-}
-
-function buildMultiLabelJob(name, dob, barcodes, qty) {
-  qty = parseInt(qty || "1", 10);
-  let job = "";
-
-  barcodes.forEach(bc => {
-    let zpl = buildSingleLabelZpl(name, dob, bc.trim());
-
-    if (qty > 1) {
-      // insert quantity before ^XZ
-      zpl = zpl.replace(/\^XZ$/, `^PQ${qty},0,1,Y^XZ`);
-    }
-
-    job += zpl + "\r\n";
-  });
-
-  return job;
 }
 
 function debugHex(str) {
@@ -68,69 +37,110 @@ function debugHex(str) {
     .join(" ");
 }
 
+function buildSingleLabelZpl(name, dob, barcode, qty) {
+  qty = parseInt(qty || "1", 10);
+  if (!qty || qty < 1) qty = 1;
+
+  // Base label
+  let zpl = `^XA
+^PW406
+^LL300
+^FO20,20^A0N,32,32^FD${name}^FS
+^FO20,60^A0N,28,28^FDDOB: ${dob}^FS
+^FO20,110^BY2,2,80^BCN,80,Y,N,N^FD${barcode}^FS`;
+
+  // Add qty if > 1
+  if (qty > 1) {
+    zpl += `\n^PQ${qty},0,1,Y`;
+  }
+
+  // End label
+  zpl += `\n^XZ`;
+
+  return zpl;
+}
+
+/**
+ * items format: "BARCODE*QTY|BARCODE*QTY|BARCODE*QTY"
+ * qty optional: if not present, defaults to 1
+ * Example: "111*1|222*3|333*2"
+ */
+function parseItems(itemsStr) {
+  let decoded = decodeURIComponent(itemsStr || "").trim();
+  if (!decoded) return [];
+
+  return decoded.split("|").map(part => {
+    let [barcode, qty] = part.split("*");
+    barcode = (barcode || "").trim();
+    qty = (qty || "1").trim();
+
+    if (!barcode) return null;
+    return { barcode, qty };
+  }).filter(Boolean);
+}
+
 function processAndPrint() {
   let callback = getParamFromHash("cb") || "asana://";
-  let qty = getParamFromHash("qty") || "1";
 
-  // MODE 1 (legacy): full ZPL passed in hash
+  // MODE A: Legacy mode (full ZPL provided)
   let zplRaw = getParamFromHash("zpl");
 
-  // MODE 2 (recommended): name/dob + barcodes
+  // MODE B: New mode (name + dob + items with per-label qty)
   let name = getParamFromHash("name");
   let dob  = getParamFromHash("dob");
-  let bcList = getParamFromHash("bc");
+  let itemsStr = getParamFromHash("items");
 
   let finalZpl = "";
 
   if (zplRaw) {
-    // Legacy mode: ZPL already provided
+    // ✅ Legacy mode
     let decoded = "";
     try { decoded = decodeURIComponent(zplRaw); }
     catch(e) { decoded = zplRaw; }
 
     finalZpl = decoded.trim();
-
     if (!finalZpl.includes("^XA")) {
       document.getElementById("debugText").innerText =
         "❌ ZPL missing ^XA. Corrupted:\n\n" + finalZpl;
       return;
     }
-
-    if (!finalZpl.trim().endsWith("^XZ")) {
-      finalZpl += "^XZ";
-    }
-
-    // Apply qty to entire job
-    if (parseInt(qty, 10) > 1) {
-      finalZpl = finalZpl.replace(/\^XZ$/, `^PQ${qty},0,1,Y^XZ`);
-    }
-
+    if (!finalZpl.trim().endsWith("^XZ")) finalZpl += "^XZ";
     finalZpl += "\r\n";
 
-  } else if (name && dob && bcList) {
-    // Recommended mode
+  } else if (name && dob && itemsStr) {
+    // ✅ New mode
     let decodedName = decodeURIComponent(name);
     let decodedDob  = decodeURIComponent(dob);
-    let decodedBcList = decodeURIComponent(bcList);
 
-    let barcodes = decodedBcList.split("|");
-    finalZpl = buildMultiLabelJob(decodedName, decodedDob, barcodes, qty);
+    let items = parseItems(itemsStr);
+
+    if (!items.length) {
+      document.getElementById("debugText").innerText =
+        "❌ items= missing or invalid.\n\nExample:\nitems=111*1|222*3|333*2";
+      return;
+    }
+
+    // Build one print job with multiple labels
+    finalZpl = items.map(item =>
+      buildSingleLabelZpl(decodedName, decodedDob, item.barcode, item.qty)
+    ).join("\r\n") + "\r\n";
+
   } else {
     document.getElementById("debugText").innerText =
       "❌ Missing data.\n\nProvide either:\n\n" +
       "#zpl=...\n\nOR\n\n" +
-      "#name=...&dob=...&bc=111|222|333\n\n" +
-      "Optional: &qty=2 and &cb=asana://";
+      "#name=...&dob=...&items=111*1|222*3|333*2\n\n" +
+      "Optional: &cb=asana://";
     return;
   }
 
-  // Sanitize + ensure ASCII safe for Base64
+  // Sanitize
   finalZpl = sanitizeZpl(finalZpl) + "\r\n";
 
   // Base64 encode
   let base64Zpl = btoa(finalZpl);
 
-  // Build deep link to Mobiprint/Arrowhead
+  // Deep link to Mobiprint / Arrowhead
   let deepLink =
     "arrowhead://x-callback-url/zplcode" +
     "?code=" + encodeURIComponent(base64Zpl) +
@@ -142,18 +152,17 @@ function processAndPrint() {
   // Debug output
   document.getElementById("debugText").innerText =
     "✅ Ready to print\n\n" +
-    "Qty per barcode: " + qty + "\n\n" +
     "✅ ZPL Preview (first 250 chars):\n" + finalZpl.slice(0, 250) + "...\n\n" +
     "✅ HEX (first 40 chars):\n" + debugHex(finalZpl) + "\n\n" +
     "✅ Base64 (first 60 chars):\n" + base64Zpl.slice(0, 60) + "...\n\n" +
     "✅ Deep Link:\n" + deepLink;
 
-  // ✅ Auto-launch deep link (minimal clicks)
+  // ✅ Auto-launch (minimum clicks)
   setTimeout(() => {
     window.location.href = deepLink;
   }, 200);
 
-  // ✅ Remove PHI from address bar after attempt
+  // ✅ Clear PHI from address bar after attempt
   setTimeout(() => {
     history.replaceState(null, "", window.location.pathname);
   }, 2000);
