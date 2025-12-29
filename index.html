@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>SMS Print</title>
+  <title>SMS Print (Shortcut)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     body { font-family: -apple-system, sans-serif; text-align: center; padding: 28px 16px; background: #fff; }
@@ -13,7 +13,7 @@
       display: inline-block;
       padding: 18px 34px;
       margin-top: 18px;
-      background: #28a745;
+      background: #007bff;
       color: white;
       text-decoration: none;
       border-radius: 12px;
@@ -33,7 +33,13 @@
       white-space: pre-wrap;
       border: 1px solid #eee;
     }
-    .small { font-size: 12px; color: #666; margin-top: 10px; }
+    .warn {
+      margin-top: 12px;
+      font-size: 13px;
+      color: #b00020;
+      font-weight: 700;
+      line-height: 1.35;
+    }
   </style>
 </head>
 
@@ -46,17 +52,17 @@
   <p class="sub"><strong>DOB:</strong> <span id="patientDob">—</span></p>
   <p class="sub"><strong>Labels:</strong> <span id="labelCount">—</span></p>
 
-  <a id="printBtn" href="#" class="btn">Tap to Print</a>
+  <a id="runShortcutBtn" href="#" class="btn">Run Shortcut & Print</a>
 
   <div class="hint" id="hintText">
-    If Mobiprint does not open automatically, tap again.
+    This will open the iOS Shortcut named <b>SMS Print</b> and then return to Asana.
+  </div>
+
+  <div class="warn" id="warnText" style="display:none;">
+    ⚠️ Shortcut-only mode: if the shortcut is not installed, printing will not run.
   </div>
 
   <div id="debugText" class="debug">Initializing...</div>
-
-  <div class="small">
-    (This page does not send patient data to the server — hash (#) is processed locally.)
-  </div>
 </div>
 
 <script>
@@ -70,47 +76,6 @@ function getParamFromHash(key) {
   return params.get(key) || "";
 }
 
-function sanitizeZpl(zpl) {
-  zpl = zpl.replace(/^\uFEFF/, "");
-  zpl = zpl.replace(/\u00A0/g, " ");
-  zpl = zpl.replace(/[^\x00-\x7F]/g, "");
-  return zpl.trim();
-}
-
-function debugHex(str) {
-  return Array.from(str.slice(0, 40))
-    .map(c => c.charCodeAt(0).toString(16).padStart(2,'0'))
-    .join(" ");
-}
-
-/**
- * Build one label (patient name + DOB + barcode)
- * Add ^PQ per label (qty) when qty > 1
- */
-function buildSingleLabelZpl(name, dob, barcode, qty) {
-  qty = parseInt(qty || "1", 10);
-  if (!qty || qty < 1) qty = 1;
-
-  let zpl = `^XA
-^PW406
-^LL300
-^FO20,20^A0N,32,32^FD${name}^FS
-^FO20,60^A0N,28,28^FDDOB: ${dob}^FS
-^FO20,110^BY2,2,80^BCN,80,Y,N,N^FD${barcode}^FS`;
-
-  if (qty > 1) zpl += `\n^PQ${qty},0,1,Y`;
-
-  zpl += `\n^XZ`;
-  return zpl;
-}
-
-/**
- * items format:
- *   items=BARCODE*QTY|BARCODE*QTY|BARCODE
- * qty optional defaults to 1
- * Example:
- *   items=111*1|222*3|333*2
- */
 function parseItems(itemsStr) {
   const decoded = decodeURIComponent(itemsStr || "").trim();
   if (!decoded) return [];
@@ -125,31 +90,18 @@ function parseItems(itemsStr) {
 }
 
 /* ============================
-   State
+   Build Shortcut URL
 ============================ */
 
-let mobiprintDeepLink = "";
+let shortcutURL = "";
 let callbackUrl = "asana://";
 let patientName = "";
 let patientDob = "";
-let zplPreview = "";
 
-/* ============================
-   Build job from hash
-============================ */
-
-function buildPrintJobFromHash() {
-  // Reset display
-  document.getElementById("patientName").innerText = "—";
-  document.getElementById("patientDob").innerText = "—";
-  document.getElementById("labelCount").innerText = "—";
-
+function buildShortcutURLFromHash() {
   document.getElementById("debugText").innerText = "Processing hash...";
-  document.getElementById("printBtn").href = "#";
 
-  // Inputs
   callbackUrl = getParamFromHash("cb") || "asana://";
-
   const nameParam = getParamFromHash("name");
   const dobParam  = getParamFromHash("dob");
   const itemsParam = getParamFromHash("items");
@@ -166,7 +118,6 @@ function buildPrintJobFromHash() {
 
   patientName = decodeURIComponent(nameParam);
   patientDob  = decodeURIComponent(dobParam);
-
   const items = parseItems(itemsParam);
 
   if (!items.length) {
@@ -180,90 +131,83 @@ function buildPrintJobFromHash() {
   document.getElementById("patientName").innerText = patientName;
   document.getElementById("patientDob").innerText = patientDob;
 
-  // Count total labels including qty
+  // Count labels total (sum qty)
   const totalLabels = items.reduce((sum, it) => sum + Math.max(1, parseInt(it.qty || "1", 10) || 1), 0);
   document.getElementById("labelCount").innerText =
     `${items.length} barcode(s) / ${totalLabels} label(s) total`;
 
-  // Build ZPL job
-  let finalZpl = items.map(it => buildSingleLabelZpl(patientName, patientDob, it.barcode, it.qty)).join("\r\n") + "\r\n";
-  finalZpl = sanitizeZpl(finalZpl) + "\r\n";
-  zplPreview = finalZpl;
+  // Payload passed to Shortcut
+  // Keep items format human readable
+  const itemsDecoded = decodeURIComponent(itemsParam);
 
-  // Base64 encode job
-  const base64Zpl = btoa(finalZpl);
+  const payload =
+    `name=${encodeURIComponent(patientName)}` +
+    `&dob=${encodeURIComponent(patientDob)}` +
+    `&items=${encodeURIComponent(itemsDecoded)}` +
+    `&cb=${encodeURIComponent(callbackUrl)}`;
 
-  // Build deep link
-  mobiprintDeepLink =
-    "arrowhead://x-callback-url/zplcode" +
-    "?code=" + encodeURIComponent(base64Zpl) +
-    "&x-success=" + encodeURIComponent(callbackUrl) +
-    "&x-error=" + encodeURIComponent(callbackUrl) +
-    "&x-cancel=" + encodeURIComponent(callbackUrl);
+  // Shortcut must exist with this exact name
+  const shortcutName = "SMS Print";
 
-  // Set print button href (useful for long-press/copy too)
-  document.getElementById("printBtn").href = mobiprintDeepLink;
+  shortcutURL =
+    "shortcuts://run-shortcut" +
+    "?name=" + encodeURIComponent(shortcutName) +
+    "&input=text" +
+    "&text=" + encodeURIComponent(payload);
 
-  // Debug output
+  // Set button href (so user can long-press too)
+  document.getElementById("runShortcutBtn").href = shortcutURL;
+
+  // Debug
   document.getElementById("debugText").innerText =
-    "✅ Parsed inputs\n\n" +
+    "✅ Shortcut-only mode\n\n" +
+    "Shortcut name: " + shortcutName + "\n" +
     "Name: " + patientName + "\n" +
     "DOB: " + patientDob + "\n" +
     "Callback: " + callbackUrl + "\n\n" +
-    "✅ ZPL Preview (first 300 chars):\n" + finalZpl.slice(0, 300) + "...\n\n" +
-    "✅ HEX (first 40 chars):\n" + debugHex(finalZpl) + "\n\n" +
-    "✅ Deep Link:\n" + mobiprintDeepLink;
+    "✅ Payload passed to Shortcut:\n" + decodeURIComponent(payload) + "\n\n" +
+    "✅ Shortcut URL:\n" + shortcutURL + "\n\n" +
+    "NOTE: No Mobiprint fallback is enabled.";
 
+  document.getElementById("warnText").style.display = "block";
   return true;
 }
 
 /* ============================
-   Print action (must be user gesture)
+   Tap handler
 ============================ */
 
-function onTapToPrint(e) {
+function runShortcut(e) {
   e.preventDefault();
 
-  // If link wasn't built, try again
-  if (!mobiprintDeepLink) {
-    const ok = buildPrintJobFromHash();
-    if (!ok) return;
-  }
+  // Always rebuild (ensures Safari tab reuse prints new data)
+  const ok = buildShortcutURLFromHash();
+  if (!ok) return;
 
-  // Launch Mobiprint (user gesture)
-  window.location.href = mobiprintDeepLink;
+  // Launch Shortcut (user gesture)
+  window.location.href = shortcutURL;
 
-  // Clear PHI from address bar shortly after tap
+  // Clear PHI from address bar
   setTimeout(() => {
     history.replaceState(null, "", window.location.pathname);
-  }, 700);
+  }, 800);
 
-  // Best-effort return to Asana even if x-success fails
-  // (Don't make it too fast or it interrupts the app open)
+  // OPTIONAL: Safety return to Asana if user comes back and is stuck in browser
+  // (Shortcut should return to Asana itself, but this helps if user cancels)
   setTimeout(() => {
     window.location.href = callbackUrl;
-  }, 2200);
+  }, 5000);
 }
 
 /* ============================
-   Setup
+   Init
 ============================ */
 
 function init() {
-  const ok = buildPrintJobFromHash();
-
-  // Attach tap handler
-  document.getElementById("printBtn").onclick = onTapToPrint;
-
-  // If ok, update title
-  if (ok) {
-    document.title = "Ready to Print";
-  } else {
-    document.title = "SMS Print";
-  }
+  buildShortcutURLFromHash();
+  document.getElementById("runShortcutBtn").onclick = runShortcut;
 }
 
-// Run on load AND on hash change so Safari tab reuse prints correct new info
 window.onload = init;
 window.onhashchange = init;
 </script>
