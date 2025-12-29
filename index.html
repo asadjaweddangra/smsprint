@@ -9,6 +9,7 @@
     .title { font-size: 20px; font-weight: 800; margin: 0 0 6px; }
     .sub { font-size: 16px; margin: 0 0 4px; }
     .sub strong { font-weight: 800; }
+
     .btn {
       display: inline-block;
       padding: 18px 34px;
@@ -20,6 +21,8 @@
       font-size: 20px;
       font-weight: 800;
     }
+    .btn:active { transform: scale(0.99); }
+
     .hint { margin-top: 10px; font-size: 13px; color: #666; line-height: 1.35; }
     .debug {
       margin-top: 16px;
@@ -40,6 +43,13 @@
       font-weight: 700;
       line-height: 1.35;
     }
+    .ok {
+      margin-top: 10px;
+      font-size: 13px;
+      color: #0a7a2f;
+      font-weight: 700;
+      line-height: 1.35;
+    }
   </style>
 </head>
 
@@ -52,10 +62,15 @@
   <p class="sub"><strong>DOB:</strong> <span id="patientDob">—</span></p>
   <p class="sub"><strong>Labels:</strong> <span id="labelCount">—</span></p>
 
+  <!-- IMPORTANT: Let href do the navigation (fastest) -->
   <a id="runShortcutBtn" href="#" class="btn">Run Shortcut & Print</a>
 
   <div class="hint" id="hintText">
-    This will open the iOS Shortcut named <b>SMS Print</b> and then return to Asana.
+    This opens the iOS Shortcut named <b>SMS Print</b>. The Shortcut will print and return to Asana.
+  </div>
+
+  <div class="ok" id="readyText" style="display:none;">
+    ✅ Ready. Tap “Run Shortcut & Print”.
   </div>
 
   <div class="warn" id="warnText" style="display:none;">
@@ -76,6 +91,10 @@ function getParamFromHash(key) {
   return params.get(key) || "";
 }
 
+/**
+ * items format:
+ * items=BARCODE*QTY|BARCODE*QTY|BARCODE
+ */
 function parseItems(itemsStr) {
   const decoded = decodeURIComponent(itemsStr || "").trim();
   if (!decoded) return [];
@@ -90,16 +109,21 @@ function parseItems(itemsStr) {
 }
 
 /* ============================
-   Build Shortcut URL
+   Build Shortcut URL (once on load / hashchange)
 ============================ */
 
 let shortcutURL = "";
 let callbackUrl = "asana://";
 let patientName = "";
 let patientDob = "";
+let lastPayload = "";
 
 function buildShortcutURLFromHash() {
+  // Reset UI
+  document.getElementById("readyText").style.display = "none";
+  document.getElementById("warnText").style.display = "none";
   document.getElementById("debugText").innerText = "Processing hash...";
+  document.getElementById("runShortcutBtn").href = "#";
 
   callbackUrl = getParamFromHash("cb") || "asana://";
   const nameParam = getParamFromHash("name");
@@ -131,13 +155,22 @@ function buildShortcutURLFromHash() {
   document.getElementById("patientName").innerText = patientName;
   document.getElementById("patientDob").innerText = patientDob;
 
-  // Count labels total (sum qty)
-  const totalLabels = items.reduce((sum, it) => sum + Math.max(1, parseInt(it.qty || "1", 10) || 1), 0);
+  // Display label count details
+  const totalLabels = items.reduce((sum, it) => {
+    const q = parseInt(it.qty || "1", 10) || 1;
+    return sum + Math.max(1, q);
+  }, 0);
+
+  // Make a human-readable list (for tech verification)
+  const lines = items.map((it, idx) => {
+    const q = parseInt(it.qty || "1", 10) || 1;
+    return `${idx+1}) ${it.barcode}  x${Math.max(1,q)}`;
+  }).join("\n");
+
   document.getElementById("labelCount").innerText =
     `${items.length} barcode(s) / ${totalLabels} label(s) total`;
 
   // Payload passed to Shortcut
-  // Keep items format human readable
   const itemsDecoded = decodeURIComponent(itemsParam);
 
   const payload =
@@ -145,6 +178,8 @@ function buildShortcutURLFromHash() {
     `&dob=${encodeURIComponent(patientDob)}` +
     `&items=${encodeURIComponent(itemsDecoded)}` +
     `&cb=${encodeURIComponent(callbackUrl)}`;
+
+  lastPayload = decodeURIComponent(payload);
 
   // Shortcut must exist with this exact name
   const shortcutName = "SMS Print";
@@ -155,48 +190,40 @@ function buildShortcutURLFromHash() {
     "&input=text" +
     "&text=" + encodeURIComponent(payload);
 
-  // Set button href (so user can long-press too)
+  // IMPORTANT: Let href handle navigation for fastest launch
   document.getElementById("runShortcutBtn").href = shortcutURL;
 
-  // Debug
+  // Debug output
   document.getElementById("debugText").innerText =
-    "✅ Shortcut-only mode\n\n" +
+    "✅ Shortcut-only mode (NO web fallback)\n\n" +
     "Shortcut name: " + shortcutName + "\n" +
-    "Name: " + patientName + "\n" +
-    "DOB: " + patientDob + "\n" +
-    "Callback: " + callbackUrl + "\n\n" +
-    "✅ Payload passed to Shortcut:\n" + decodeURIComponent(payload) + "\n\n" +
-    "✅ Shortcut URL:\n" + shortcutURL + "\n\n" +
-    "NOTE: No Mobiprint fallback is enabled.";
+    "Callback (handled by Shortcut): " + callbackUrl + "\n\n" +
+    "✅ Will print:\n" + lines + "\n\n" +
+    "✅ Payload passed to Shortcut:\n" + lastPayload + "\n\n" +
+    "✅ Shortcut URL:\n" + shortcutURL;
 
+  document.getElementById("readyText").style.display = "block";
   document.getElementById("warnText").style.display = "block";
   return true;
 }
 
 /* ============================
-   Tap handler
+   Click behavior
+   - DO NOT preventDefault (href must execute immediately)
+   - Clear PHI quickly for privacy
+   - Do NOT return to Asana (Shortcut does that)
 ============================ */
 
-function runShortcut(e) {
-  e.preventDefault();
-
-  // Always rebuild (ensures Safari tab reuse prints new data)
-  const ok = buildShortcutURLFromHash();
-  if (!ok) return;
-
-  // Launch Shortcut (user gesture)
-  window.location.href = shortcutURL;
-
-  // Clear PHI from address bar
+function onClickShortcutButton() {
+  // Clear PHI from address bar soon after tap
   setTimeout(() => {
     history.replaceState(null, "", window.location.pathname);
-  }, 800);
+  }, 400);
 
-  // OPTIONAL: Safety return to Asana if user comes back and is stuck in browser
-  // (Shortcut should return to Asana itself, but this helps if user cancels)
+  // Optional: update debug for click confirmation
   setTimeout(() => {
-    window.location.href = callbackUrl;
-  }, 5000);
+    document.getElementById("debugText").innerText += "\n\n✅ Tap registered. Launching Shortcut...";
+  }, 50);
 }
 
 /* ============================
@@ -205,9 +232,13 @@ function runShortcut(e) {
 
 function init() {
   buildShortcutURLFromHash();
-  document.getElementById("runShortcutBtn").onclick = runShortcut;
+
+  // Attach click handler (but do not block navigation)
+  const btn = document.getElementById("runShortcutBtn");
+  btn.onclick = onClickShortcutButton;
 }
 
+// Run on load AND on hash change so new links update in already-open Safari tab
 window.onload = init;
 window.onhashchange = init;
 </script>
