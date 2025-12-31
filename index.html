@@ -10,7 +10,9 @@
     .sub { font-size: 16px; margin: 0 0 6px; text-align:left; }
     .sub strong { font-weight: 800; }
     .btn { display:inline-block; padding:18px 34px; margin-top:16px; background:#28a745; color:#fff; text-decoration:none; border-radius:12px; font-size:20px; font-weight:800; }
+    .btnSecondary { display:inline-block; padding:14px 22px; margin-top:10px; background:#111; color:#fff; text-decoration:none; border-radius:12px; font-size:15px; font-weight:800; }
     .debug { margin-top:16px; font-size:12px; color:#222; word-break:break-all; text-align:left; background:#f7f7f7; padding:14px; border-radius:12px; white-space:pre-wrap; border:1px solid #eee; }
+    .small { margin-top:10px; font-size:12px; color:#666; text-align:left; }
   </style>
 </head>
 <body>
@@ -22,7 +24,12 @@
   <div class="sub"><strong>Will print:</strong><br><span id="labelList">—</span></div>
   <div class="sub"><strong>Total labels:</strong> <span id="totalLabels">—</span></div>
 
-  <a id="printBtn" class="btn" href="#">Tap to Print</a>
+  <a id="printBtn" class="btn" href="#">Tap to Print</a><br>
+  <a id="backBtn" class="btnSecondary" href="#">Back to Asana & Close Tab</a>
+
+  <div class="small">
+    Android: MobiPrint may open as a floating window; this page will auto-return to Asana after you tap Print.
+  </div>
 
   <div id="debugText" class="debug">Initializing...</div>
 </div>
@@ -54,11 +61,7 @@ function sanitizeZpl(zpl) {
 }
 
 /**
- * ✅ Tighter layout: barcode moved closer to name
- * Name: y=18
- * DOB:  y=48
- * Barcode: y=78
- * Barcode height reduced to 70
+ * ✅ Tighter layout: barcode closer to name
  */
 function buildSingleLabelZpl(name, dob, barcode, qty) {
   qty = parseInt(qty || "1", 10);
@@ -76,19 +79,18 @@ function buildSingleLabelZpl(name, dob, barcode, qty) {
 
   if (qty > 1) zpl += `\n^PQ${qty},0,1,Y`;
 
-  zpl += `\n^XZ\r\n`;
+  zpl += `\n^XZ\r\n`; // critical separator
   return zpl;
 }
 
-// MobiPrint Android web integration: replace '=' with '_' in base64
+// MobiPrint Android web integration: Base64 then replace '=' with '_' (vendor behavior)
 function mobiprintBase64(zpl) {
   let b64 = btoa(zpl);
   return b64.replace(/=/g, "_");
 }
 
-function buildLinkForPlatform(codeB64, cb) {
+function buildMobiPrintLink(codeB64, cb) {
   const isAndroid = /Android/i.test(navigator.userAgent);
-
   const qs =
     "x-callback-url/zplcode?code=" + encodeURIComponent(codeB64) +
     "&x-success=" + encodeURIComponent(cb) +
@@ -96,23 +98,38 @@ function buildLinkForPlatform(codeB64, cb) {
     "&x-cancel=" + encodeURIComponent(cb);
 
   if (isAndroid) {
-    // Most reliable Android launch:
+    // Android intent launch (reliable)
     const pkg = "com.mobiprintpro.retail.android";
     return "intent://" + qs + "#Intent;scheme=arrowhead;package=" + pkg + ";end";
   }
+  return "arrowhead://" + qs; // iOS
+}
 
-  return "arrowhead://" + qs;
+// Android: use Asana intent (more reliable than asana://)
+function asanaIntent() {
+  return "intent://#Intent;scheme=asana;package=com.asana.app;end";
+}
+
+function goToAsanaAndTryClose() {
+  // Attempt to open Asana
+  window.location.href = asanaIntent();
+
+  // Attempt to close tab (may be ignored by Chrome if not script-opened)
+  setTimeout(() => { window.close(); }, 150);
 }
 
 let deepLink = "";
 let callbackUrl = "asana://";
-let androidReturnArmed = false;
+let isAndroid = false;
+let autoReturnTimer = null;
 
 function init() {
+  isAndroid = /Android/i.test(navigator.userAgent);
+
   const nameParam = getParamFromHash("name");
   const dobParam  = getParamFromHash("dob");
   const itemsParam = getParamFromHash("items");
-  callbackUrl = getParamFromHash("cb") || "asana://";
+  callbackUrl = getParamFromHash("cb") || "asana://"; // kept for debug; Android return uses intent
 
   if (!nameParam || !dobParam || !itemsParam) {
     document.getElementById("debugText").innerText =
@@ -138,42 +155,43 @@ function init() {
   finalZpl = sanitizeZpl(finalZpl) + "\r\n";
 
   const codeB64 = mobiprintBase64(finalZpl);
-  deepLink = buildLinkForPlatform(codeB64, callbackUrl);
+  deepLink = buildMobiPrintLink(codeB64, callbackUrl);
 
   document.getElementById("printBtn").href = deepLink;
 
   document.getElementById("debugText").innerText =
     "✅ UA:\n" + navigator.userAgent + "\n\n" +
-    "✅ Callback:\n" + callbackUrl + "\n\n" +
+    "✅ Android?: " + isAndroid + "\n" +
+    "✅ Callback param (informational): " + callbackUrl + "\n" +
+    "✅ Asana intent used on Android:\n" + asanaIntent() + "\n\n" +
     "✅ Base64 length:\n" + codeB64.length + "\n\n" +
-    "✅ Deep link:\n" + deepLink + "\n\n" +
-    "✅ ZPL tail (last 140 chars):\n" + finalZpl.slice(-140);
+    "✅ MobiPrint link:\n" + deepLink + "\n\n" +
+    "✅ ZPL tail (last 160 chars):\n" + finalZpl.slice(-160);
 }
 
-// ✅ When user returns to browser on Android, jump to Asana
-document.addEventListener("visibilitychange", () => {
-  const isAndroid = /Android/i.test(navigator.userAgent);
-  if (isAndroid && androidReturnArmed && !document.hidden) {
-    window.location.href = callbackUrl;
-  }
-});
-
+// Tap to print
 document.getElementById("printBtn").onclick = function() {
   // Clear PHI quickly
   setTimeout(() => {
     history.replaceState(null, "", window.location.pathname);
-  }, 400);
+  }, 350);
 
-  // Arm Android return: when user comes back to browser, send them to Asana
+  // Android: because MobiPrint opens as floating window, we can't rely on visibilitychange.
+  // So we auto-return after a short delay.
   if (/Android/i.test(navigator.userAgent)) {
-    androidReturnArmed = true;
+    if (autoReturnTimer) clearTimeout(autoReturnTimer);
 
-    // Optional timed return fallback (in case user doesn't return)
-    setTimeout(() => {
-      // Only do this if they’re still on this page (not hidden)
-      if (!document.hidden) window.location.href = callbackUrl;
-    }, 6000);
+    // Tune this delay: 2500–4500 depending on real-world flow
+    autoReturnTimer = setTimeout(() => {
+      goToAsanaAndTryClose();
+    }, 3200);
   }
+};
+
+// Manual back button
+document.getElementById("backBtn").onclick = function(e) {
+  e.preventDefault();
+  goToAsanaAndTryClose();
 };
 
 window.onload = init;
