@@ -61,8 +61,12 @@ function parseItems(itemsStr) {
    Platform detection
 ============================ */
 function isIOS() {
-  return /iPhone|iPad|iPod/i.test(navigator.userAgent);
+  return (
+    /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
+  );
 }
+
 function isAndroid() {
   return /Android/i.test(navigator.userAgent);
 }
@@ -265,3 +269,4 @@ window.onhashchange = init;
 
 </body>
 </html>
+
