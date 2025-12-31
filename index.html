@@ -1,247 +1,160 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>SMS Print (Shortcut)</title>
+  <title>SMS Print</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     body { font-family: -apple-system, sans-serif; text-align: center; padding: 28px 16px; background: #fff; }
-    .card { max-width: 520px; margin: 0 auto; background: #ffffff; border-radius: 14px; padding: 18px; box-shadow: 0 4px 14px rgba(0,0,0,0.08); }
-    .title { font-size: 20px; font-weight: 800; margin: 0 0 6px; }
-    .sub { font-size: 16px; margin: 0 0 4px; }
+    .card { max-width: 560px; margin: 0 auto; background: #fff; border-radius: 14px; padding: 18px; box-shadow: 0 4px 14px rgba(0,0,0,0.08); }
+    .title { font-size: 20px; font-weight: 800; margin: 0 0 10px; }
+    .sub { font-size: 16px; margin: 0 0 6px; text-align:left; }
     .sub strong { font-weight: 800; }
-
-    .btn {
-      display: inline-block;
-      padding: 18px 34px;
-      margin-top: 18px;
-      background: #007bff;
-      color: white;
-      text-decoration: none;
-      border-radius: 12px;
-      font-size: 20px;
-      font-weight: 800;
-    }
-    .btn:active { transform: scale(0.99); }
-
-    .hint { margin-top: 10px; font-size: 13px; color: #666; line-height: 1.35; }
-    .debug {
-      margin-top: 16px;
-      font-size: 12px;
-      color: #222;
-      word-break: break-all;
-      text-align: left;
-      background: #f7f7f7;
-      padding: 14px;
-      border-radius: 12px;
-      white-space: pre-wrap;
-      border: 1px solid #eee;
-    }
-    .warn {
-      margin-top: 12px;
-      font-size: 13px;
-      color: #b00020;
-      font-weight: 700;
-      line-height: 1.35;
-    }
-    .ok {
-      margin-top: 10px;
-      font-size: 13px;
-      color: #0a7a2f;
-      font-weight: 700;
-      line-height: 1.35;
-    }
+    .btn { display:inline-block; padding:18px 34px; margin-top:16px; background:#28a745; color:#fff; text-decoration:none; border-radius:12px; font-size:20px; font-weight:800; }
+    .debug { margin-top:16px; font-size:12px; color:#222; word-break:break-all; text-align:left; background:#f7f7f7; padding:14px; border-radius:12px; white-space:pre-wrap; border:1px solid #eee; }
   </style>
 </head>
-
 <body>
-
 <div class="card">
   <div class="title">✅ Verify Before Printing</div>
 
-  <p class="sub"><strong>Name:</strong> <span id="patientName">—</span></p>
-  <p class="sub"><strong>DOB:</strong> <span id="patientDob">—</span></p>
-  <p class="sub"><strong>Labels:</strong> <span id="labelCount">—</span></p>
+  <div class="sub"><strong>Name:</strong> <span id="patientName">—</span></div>
+  <div class="sub"><strong>DOB:</strong> <span id="patientDob">—</span></div>
+  <div class="sub"><strong>Will print:</strong><br><span id="labelList">—</span></div>
+  <div class="sub"><strong>Total labels:</strong> <span id="totalLabels">—</span></div>
 
-  <!-- IMPORTANT: Let href do the navigation (fastest) -->
-  <a id="runShortcutBtn" href="#" class="btn">Run Shortcut & Print</a>
-
-  <div class="hint" id="hintText">
-    This opens the iOS Shortcut named <b>SMS Print</b>. The Shortcut will print and return to Asana.
-  </div>
-
-  <div class="ok" id="readyText" style="display:none;">
-    ✅ Ready. Tap “Run Shortcut & Print”.
-  </div>
-
-  <div class="warn" id="warnText" style="display:none;">
-    ⚠️ Shortcut-only mode: if the shortcut is not installed, printing will not run.
-  </div>
+  <a id="printBtn" class="btn" href="#">Tap to Print</a>
 
   <div id="debugText" class="debug">Initializing...</div>
 </div>
 
 <script>
-/* ============================
-   Helpers
-============================ */
-
 function getParamFromHash(key) {
   const hash = window.location.hash.substring(1);
   const params = new URLSearchParams(hash);
   return params.get(key) || "";
 }
 
-/**
- * items format:
- * items=BARCODE*QTY|BARCODE*QTY|BARCODE
- */
 function parseItems(itemsStr) {
   const decoded = decodeURIComponent(itemsStr || "").trim();
   if (!decoded) return [];
-
   return decoded.split("|").map(part => {
     let [barcode, qty] = part.split("*");
     barcode = (barcode || "").trim();
     qty = (qty || "1").trim();
     if (!barcode) return null;
-    return { barcode, qty };
+    return { barcode, qty: String(parseInt(qty,10) || 1) };
   }).filter(Boolean);
 }
 
-/* ============================
-   Build Shortcut URL (once on load / hashchange)
-============================ */
+function sanitizeZpl(zpl) {
+  zpl = zpl.replace(/^\uFEFF/, "");
+  zpl = zpl.replace(/\u00A0/g, " ");
+  zpl = zpl.replace(/[^\x00-\x7F]/g, "");
+  return zpl.trim();
+}
 
-let shortcutURL = "";
-let callbackUrl = "asana://";
-let patientName = "";
-let patientDob = "";
-let lastPayload = "";
+// Fast + consistent label template + IMPORTANT: newline after ^XZ
+function buildSingleLabelZpl(name, dob, barcode, qty) {
+  qty = parseInt(qty || "1", 10);
+  if (!qty || qty < 1) qty = 1;
 
-function buildShortcutURLFromHash() {
-  // Reset UI
-  document.getElementById("readyText").style.display = "none";
-  document.getElementById("warnText").style.display = "none";
-  document.getElementById("debugText").innerText = "Processing hash...";
-  document.getElementById("runShortcutBtn").href = "#";
+  let zpl = `^XA
+^MMT
+^MNW
+^PR6
+^PW406
+^LL300
+^FO20,20^A0N,32,32^FD${name}^FS
+^FO20,60^A0N,28,28^FDDOB: ${dob}^FS
+^FO20,110^BY2,2,80^BCN,80,Y,N,N^FD${barcode}^FS`;
 
-  callbackUrl = getParamFromHash("cb") || "asana://";
+  if (qty > 1) zpl += `\n^PQ${qty},0,1,Y`;
+
+  zpl += `\n^XZ\r\n`; // <-- critical for multi-label jobs
+  return zpl;
+}
+
+// MobiPrint docs for Android web: Base64 then replace '=' with '_' :contentReference[oaicite:3]{index=3}
+function mobiprintBase64(zpl) {
+  let b64 = btoa(zpl);
+  return b64.replace(/=/g, "_");
+}
+
+function buildLinkForPlatform(codeB64, cb) {
+  const isAndroid = /Android/i.test(navigator.userAgent);
+
+  const qs =
+    "x-callback-url/zplcode?code=" + encodeURIComponent(codeB64) +
+    "&x-success=" + encodeURIComponent(cb) +
+    "&x-error=" + encodeURIComponent(cb) +
+    "&x-cancel=" + encodeURIComponent(cb);
+
+  // Android: prefer intent with known package id from Play Store :contentReference[oaicite:4]{index=4}
+  if (isAndroid) {
+    const pkg = "com.mobiprintpro.retail.android";
+    return "intent://" + qs + "#Intent;scheme=arrowhead;package=" + pkg + ";end";
+  }
+
+  // iOS / others: normal scheme
+  return "arrowhead://" + qs;
+}
+
+let deepLink = "";
+
+function init() {
   const nameParam = getParamFromHash("name");
   const dobParam  = getParamFromHash("dob");
   const itemsParam = getParamFromHash("items");
+  const cb = getParamFromHash("cb") || "asana://";
 
   if (!nameParam || !dobParam || !itemsParam) {
     document.getElementById("debugText").innerText =
-      "❌ Missing required parameters.\n\n" +
-      "Expected hash format:\n" +
-      "#name=...&dob=...&items=111*1|222*3|333*2&cb=asana://\n\n" +
+      "❌ Missing required params.\n\nUse:\n" +
+      "#name=...&dob=...&items=111*1|222*3&cb=asana://\n\n" +
       "Example:\n" +
-      "#name=TEST%20PATIENT%20A&dob=02%2F02%2F1992&items=1111111111*1%7C2222222222*3%7C3333333333*2&cb=asana://";
-    return false;
+      "#name=TEST%20PATIENT%20A&dob=02%2F02%2F1992&items=1111111111*1%7C2222222222*3";
+    return;
   }
 
-  patientName = decodeURIComponent(nameParam);
-  patientDob  = decodeURIComponent(dobParam);
+  const name = decodeURIComponent(nameParam);
+  const dob  = decodeURIComponent(dobParam);
   const items = parseItems(itemsParam);
 
-  if (!items.length) {
-    document.getElementById("debugText").innerText =
-      "❌ items parameter invalid or empty.\n\n" +
-      "Valid example:\nitems=1111111111*1|2222222222*3|3333333333*2";
-    return false;
-  }
+  document.getElementById("patientName").innerText = name;
+  document.getElementById("patientDob").innerText = dob;
 
-  // Display verification
-  document.getElementById("patientName").innerText = patientName;
-  document.getElementById("patientDob").innerText = patientDob;
+  const listLines = items.map((it,i)=>`${i+1}) ${it.barcode}  x${it.qty}`).join("\n");
+  document.getElementById("labelList").innerText = listLines;
 
-  // Display label count details
-  const totalLabels = items.reduce((sum, it) => {
-    const q = parseInt(it.qty || "1", 10) || 1;
-    return sum + Math.max(1, q);
-  }, 0);
+  const total = items.reduce((s,it)=> s + Math.max(1, parseInt(it.qty,10)||1), 0);
+  document.getElementById("totalLabels").innerText = String(total);
 
-  // Make a human-readable list (for tech verification)
-  const lines = items.map((it, idx) => {
-    const q = parseInt(it.qty || "1", 10) || 1;
-    return `${idx+1}) ${it.barcode}  x${Math.max(1,q)}`;
-  }).join("\n");
+  let finalZpl = items.map(it => buildSingleLabelZpl(name, dob, it.barcode, it.qty)).join("");
+  finalZpl = sanitizeZpl(finalZpl) + "\r\n";
 
-  document.getElementById("labelCount").innerText =
-    `${items.length} barcode(s) / ${totalLabels} label(s) total`;
+  const codeB64 = mobiprintBase64(finalZpl);
+  deepLink = buildLinkForPlatform(codeB64, cb);
 
-  // Payload passed to Shortcut
-  const itemsDecoded = decodeURIComponent(itemsParam);
+  document.getElementById("printBtn").href = deepLink;
 
-  const payload =
-    `name=${encodeURIComponent(patientName)}` +
-    `&dob=${encodeURIComponent(patientDob)}` +
-    `&items=${encodeURIComponent(itemsDecoded)}` +
-    `&cb=${encodeURIComponent(callbackUrl)}`;
-
-  lastPayload = decodeURIComponent(payload);
-
-  // Shortcut must exist with this exact name
-  const shortcutName = "SMS Print";
-
-  shortcutURL =
-    "shortcuts://run-shortcut" +
-    "?name=" + encodeURIComponent(shortcutName) +
-    "&input=text" +
-    "&text=" + encodeURIComponent(payload);
-
-  // IMPORTANT: Let href handle navigation for fastest launch
-  document.getElementById("runShortcutBtn").href = shortcutURL;
-
-  // Debug output
   document.getElementById("debugText").innerText =
-    "✅ Shortcut-only mode (NO web fallback)\n\n" +
-    "Shortcut name: " + shortcutName + "\n" +
-    "Callback (handled by Shortcut): " + callbackUrl + "\n\n" +
-    "✅ Will print:\n" + lines + "\n\n" +
-    "✅ Payload passed to Shortcut:\n" + lastPayload + "\n\n" +
-    "✅ Shortcut URL:\n" + shortcutURL;
-
-  document.getElementById("readyText").style.display = "block";
-  document.getElementById("warnText").style.display = "block";
-  return true;
+    "✅ Platform UA:\n" + navigator.userAgent + "\n\n" +
+    "✅ Base64 length:\n" + codeB64.length + "\n\n" +
+    "✅ Deep link:\n" + deepLink + "\n\n" +
+    "✅ ZPL tail (last 120 chars):\n" + finalZpl.slice(-120);
 }
 
-/* ============================
-   Click behavior
-   - DO NOT preventDefault (href must execute immediately)
-   - Clear PHI quickly for privacy
-   - Do NOT return to Asana (Shortcut does that)
-============================ */
-
-function onClickShortcutButton() {
-  // Clear PHI from address bar soon after tap
+// User gesture = best reliability
+document.getElementById("printBtn").onclick = function() {
+  // Clear PHI from address bar shortly after tap (doesn't affect hash being read now)
   setTimeout(() => {
     history.replaceState(null, "", window.location.pathname);
   }, 400);
+  // DO NOT return to Asana from webpage (you asked Shortcut handles it)
+};
 
-  // Optional: update debug for click confirmation
-  setTimeout(() => {
-    document.getElementById("debugText").innerText += "\n\n✅ Tap registered. Launching Shortcut...";
-  }, 50);
-}
-
-/* ============================
-   Init
-============================ */
-
-function init() {
-  buildShortcutURLFromHash();
-
-  // Attach click handler (but do not block navigation)
-  const btn = document.getElementById("runShortcutBtn");
-  btn.onclick = onClickShortcutButton;
-}
-
-// Run on load AND on hash change so new links update in already-open Safari tab
 window.onload = init;
 window.onhashchange = init;
 </script>
-
 </body>
 </html>
