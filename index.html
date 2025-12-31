@@ -5,18 +5,21 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     body { font-family: -apple-system, sans-serif; text-align: center; padding: 28px 16px; background: #fff; }
-    .card { max-width: 560px; margin: 0 auto; background: #fff; border-radius: 14px; padding: 18px; box-shadow: 0 4px 14px rgba(0,0,0,0.08); }
+    .card { max-width: 600px; margin: 0 auto; background: #fff; border-radius: 14px; padding: 18px; box-shadow: 0 4px 14px rgba(0,0,0,0.08); }
     .title { font-size: 20px; font-weight: 800; margin: 0 0 10px; }
     .sub { font-size: 16px; margin: 0 0 6px; text-align:left; }
     .sub strong { font-weight: 800; }
     .btn { display:inline-block; padding:18px 34px; margin-top:16px; background:#28a745; color:#fff; text-decoration:none; border-radius:12px; font-size:20px; font-weight:800; }
     .btnSecondary { display:inline-block; padding:14px 22px; margin-top:10px; background:#111; color:#fff; text-decoration:none; border-radius:12px; font-size:15px; font-weight:800; }
     .debug { margin-top:16px; font-size:12px; color:#222; word-break:break-all; text-align:left; background:#f7f7f7; padding:14px; border-radius:12px; white-space:pre-wrap; border:1px solid #eee; }
-    .small { margin-top:10px; font-size:12px; color:#666; text-align:left; }
+    .hint { margin-top:10px; font-size:12px; color:#666; text-align:left; line-height:1.35; }
+    .pill { display:inline-block; padding:4px 10px; border-radius:999px; background:#eee; font-size:12px; font-weight:700; margin-bottom:10px; }
   </style>
 </head>
+
 <body>
 <div class="card">
+  <div class="pill" id="platformPill">Detecting platform…</div>
   <div class="title">✅ Verify Before Printing</div>
 
   <div class="sub"><strong>Name:</strong> <span id="patientName">—</span></div>
@@ -25,16 +28,17 @@
   <div class="sub"><strong>Total labels:</strong> <span id="totalLabels">—</span></div>
 
   <a id="printBtn" class="btn" href="#">Tap to Print</a><br>
-  <a id="backBtn" class="btnSecondary" href="#">Back to Asana & Close Tab</a>
+  <a id="backBtn" class="btnSecondary" href="#" style="display:none;">Back to Asana & Close Tab</a>
 
-  <div class="small">
-    Android: MobiPrint may open as a floating window; this page will auto-return to Asana after you tap Print.
-  </div>
+  <div class="hint" id="hintText"></div>
 
   <div id="debugText" class="debug">Initializing...</div>
 </div>
 
 <script>
+/* ============================
+   Helpers
+============================ */
 function getParamFromHash(key) {
   const hash = window.location.hash.substring(1);
   const params = new URLSearchParams(hash);
@@ -53,16 +57,21 @@ function parseItems(itemsStr) {
   }).filter(Boolean);
 }
 
-function sanitizeZpl(zpl) {
-  zpl = zpl.replace(/^\uFEFF/, "");
-  zpl = zpl.replace(/\u00A0/g, " ");
-  zpl = zpl.replace(/[^\x00-\x7F]/g, "");
-  return zpl.trim();
+/* ============================
+   Platform detection
+============================ */
+function isIOS() {
+  return /iPhone|iPad|iPod/i.test(navigator.userAgent);
+}
+function isAndroid() {
+  return /Android/i.test(navigator.userAgent);
 }
 
-/**
- * ✅ Tighter layout: barcode closer to name
- */
+/* ============================
+   Android: Build MobiPrint link
+============================ */
+
+// ZPL: tighter layout (barcode closer to name)
 function buildSingleLabelZpl(name, dob, barcode, qty) {
   qty = parseInt(qty || "1", 10);
   if (!qty || qty < 1) qty = 1;
@@ -79,62 +88,87 @@ function buildSingleLabelZpl(name, dob, barcode, qty) {
 
   if (qty > 1) zpl += `\n^PQ${qty},0,1,Y`;
 
-  zpl += `\n^XZ\r\n`; // critical separator
+  // critical separator for multi-label
+  zpl += `\n^XZ\r\n`;
   return zpl;
 }
 
-// MobiPrint Android web integration: Base64 then replace '=' with '_' (vendor behavior)
+function sanitizeZpl(zpl) {
+  zpl = zpl.replace(/^\uFEFF/, "");
+  zpl = zpl.replace(/\u00A0/g, " ");
+  zpl = zpl.replace(/[^\x00-\x7F]/g, "");
+  return zpl.trim();
+}
+
+// Vendor behavior for Android: Base64 then replace '=' with '_' (MobiPrint web pattern)
 function mobiprintBase64(zpl) {
   let b64 = btoa(zpl);
   return b64.replace(/=/g, "_");
 }
 
-function buildMobiPrintLink(codeB64, cb) {
-  const isAndroid = /Android/i.test(navigator.userAgent);
+function buildAndroidMobiPrintIntent(codeB64, cb) {
   const qs =
     "x-callback-url/zplcode?code=" + encodeURIComponent(codeB64) +
     "&x-success=" + encodeURIComponent(cb) +
     "&x-error=" + encodeURIComponent(cb) +
     "&x-cancel=" + encodeURIComponent(cb);
 
-  if (isAndroid) {
-    // Android intent launch (reliable)
-    const pkg = "com.mobiprintpro.retail.android";
-    return "intent://" + qs + "#Intent;scheme=arrowhead;package=" + pkg + ";end";
-  }
-  return "arrowhead://" + qs; // iOS
+  // Android intent launch (reliable)
+  const pkg = "com.mobiprintpro.retail.android";
+  return "intent://" + qs + "#Intent;scheme=arrowhead;package=" + pkg + ";end";
 }
 
-// Android: use Asana intent (more reliable than asana://)
-function asanaIntent() {
+/* ============================
+   iOS: Build Shortcut link
+============================ */
+function buildIOSShortcutURL(name, dob, itemsDecoded, cb) {
+  const shortcutName = "SMS Print"; // must match shortcut exactly
+  const payload =
+    `name=${encodeURIComponent(name)}` +
+    `&dob=${encodeURIComponent(dob)}` +
+    `&items=${encodeURIComponent(itemsDecoded)}` +
+    `&cb=${encodeURIComponent(cb)}`;
+
+  return "shortcuts://run-shortcut" +
+    "?name=" + encodeURIComponent(shortcutName) +
+    "&input=text" +
+    "&text=" + encodeURIComponent(payload);
+}
+
+/* ============================
+   Android: Return to Asana + try close
+============================ */
+function asanaIntentAndroid() {
   return "intent://#Intent;scheme=asana;package=com.asana.app;end";
 }
 
 function goToAsanaAndTryClose() {
-  // Attempt to open Asana
-  window.location.href = asanaIntent();
-
-  // Attempt to close tab (may be ignored by Chrome if not script-opened)
+  window.location.href = asanaIntentAndroid();
   setTimeout(() => { window.close(); }, 150);
 }
 
+/* ============================
+   Main
+============================ */
 let deepLink = "";
 let callbackUrl = "asana://";
-let isAndroid = false;
 let autoReturnTimer = null;
+let platform = "unknown";
 
 function init() {
-  isAndroid = /Android/i.test(navigator.userAgent);
+  platform = isIOS() ? "iOS" : (isAndroid() ? "Android" : "Other");
+  document.getElementById("platformPill").innerText = platform;
 
   const nameParam = getParamFromHash("name");
   const dobParam  = getParamFromHash("dob");
   const itemsParam = getParamFromHash("items");
-  callbackUrl = getParamFromHash("cb") || "asana://"; // kept for debug; Android return uses intent
+  callbackUrl = getParamFromHash("cb") || "asana://";
 
   if (!nameParam || !dobParam || !itemsParam) {
     document.getElementById("debugText").innerText =
       "❌ Missing required params.\n\nUse:\n" +
-      "#name=...&dob=...&items=111*1|222*3&cb=asana://";
+      "#name=...&dob=...&items=111*1|222*3&cb=asana://\n\nExample:\n" +
+      "#name=TEST%20PATIENT&dob=01%2F01%2F1990&items=50019363P1*1%7C50019363S1*1";
     return;
   }
 
@@ -151,44 +185,75 @@ function init() {
   const total = items.reduce((s,it)=> s + Math.max(1, parseInt(it.qty,10)||1), 0);
   document.getElementById("totalLabels").innerText = String(total);
 
-  let finalZpl = items.map(it => buildSingleLabelZpl(name, dob, it.barcode, it.qty)).join("");
-  finalZpl = sanitizeZpl(finalZpl) + "\r\n";
+  const itemsDecoded = decodeURIComponent(itemsParam);
 
-  const codeB64 = mobiprintBase64(finalZpl);
-  deepLink = buildMobiPrintLink(codeB64, callbackUrl);
+  // iOS → Shortcut-only (no Mobiprint prompt most of the time)
+  if (isIOS()) {
+    deepLink = buildIOSShortcutURL(name, dob, itemsDecoded, callbackUrl);
+    document.getElementById("printBtn").href = deepLink;
+    document.getElementById("backBtn").style.display = "none";
+    document.getElementById("hintText").innerText =
+      "iPhone: This will run the iOS Shortcut “SMS Print”. The Shortcut prints and returns to Asana.";
+  }
 
-  document.getElementById("printBtn").href = deepLink;
+  // Android → MobiPrint intent + auto-return to Asana + try close
+  else if (isAndroid()) {
+    let finalZpl = items.map(it => buildSingleLabelZpl(name, dob, it.barcode, it.qty)).join("");
+    finalZpl = sanitizeZpl(finalZpl) + "\r\n";
+    const codeB64 = mobiprintBase64(finalZpl);
 
+    deepLink = buildAndroidMobiPrintIntent(codeB64, callbackUrl);
+    document.getElementById("printBtn").href = deepLink;
+
+    document.getElementById("backBtn").style.display = "inline-block";
+    document.getElementById("hintText").innerText =
+      "Android: MobiPrint may open as a floating window. This page will auto-return to Asana after you tap Print.";
+
+    // Debug
+    document.getElementById("debugText").innerText =
+      "✅ Platform: Android\n\n" +
+      "✅ Asana return intent:\n" + asanaIntentAndroid() + "\n\n" +
+      "✅ Base64 length:\n" + codeB64.length + "\n\n" +
+      "✅ MobiPrint intent:\n" + deepLink + "\n\n" +
+      "✅ ZPL tail (last 160 chars):\n" + finalZpl.slice(-160);
+    return; // stop here because we already set debug
+  }
+
+  else {
+    deepLink = "javascript:void(0)";
+    document.getElementById("printBtn").href = deepLink;
+    document.getElementById("hintText").innerText =
+      "Unsupported device. Use iPhone (Shortcut) or Android (MobiPrint).";
+  }
+
+  // Debug for iOS/Other
   document.getElementById("debugText").innerText =
-    "✅ UA:\n" + navigator.userAgent + "\n\n" +
-    "✅ Android?: " + isAndroid + "\n" +
-    "✅ Callback param (informational): " + callbackUrl + "\n" +
-    "✅ Asana intent used on Android:\n" + asanaIntent() + "\n\n" +
-    "✅ Base64 length:\n" + codeB64.length + "\n\n" +
-    "✅ MobiPrint link:\n" + deepLink + "\n\n" +
-    "✅ ZPL tail (last 160 chars):\n" + finalZpl.slice(-160);
+    "✅ Platform: " + platform + "\n\n" +
+    "✅ Callback param: " + callbackUrl + "\n\n" +
+    "✅ Will print:\n" + listLines + "\n\n" +
+    "✅ Deep link:\n" + deepLink;
 }
 
-// Tap to print
+/* ============================
+   Click handlers
+============================ */
+
+// iOS: just clear PHI; Shortcut handles return to Asana
+// Android: clear PHI and auto-return to Asana + close after timer
 document.getElementById("printBtn").onclick = function() {
-  // Clear PHI quickly
   setTimeout(() => {
     history.replaceState(null, "", window.location.pathname);
   }, 350);
 
-  // Android: because MobiPrint opens as floating window, we can't rely on visibilitychange.
-  // So we auto-return after a short delay.
-  if (/Android/i.test(navigator.userAgent)) {
+  if (isAndroid()) {
     if (autoReturnTimer) clearTimeout(autoReturnTimer);
-
-    // Tune this delay: 2500–4500 depending on real-world flow
     autoReturnTimer = setTimeout(() => {
       goToAsanaAndTryClose();
     }, 3200);
   }
 };
 
-// Manual back button
+// Manual return for Android
 document.getElementById("backBtn").onclick = function(e) {
   e.preventDefault();
   goToAsanaAndTryClose();
@@ -197,5 +262,6 @@ document.getElementById("backBtn").onclick = function(e) {
 window.onload = init;
 window.onhashchange = init;
 </script>
+
 </body>
 </html>
