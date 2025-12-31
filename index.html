@@ -53,7 +53,13 @@ function sanitizeZpl(zpl) {
   return zpl.trim();
 }
 
-// Fast + consistent label template + IMPORTANT: newline after ^XZ
+/**
+ * ✅ Tighter layout: barcode moved closer to name
+ * Name: y=18
+ * DOB:  y=48
+ * Barcode: y=78
+ * Barcode height reduced to 70
+ */
 function buildSingleLabelZpl(name, dob, barcode, qty) {
   qty = parseInt(qty || "1", 10);
   if (!qty || qty < 1) qty = 1;
@@ -64,17 +70,17 @@ function buildSingleLabelZpl(name, dob, barcode, qty) {
 ^PR6
 ^PW406
 ^LL300
-^FO20,20^A0N,32,32^FD${name}^FS
-^FO20,60^A0N,28,28^FDDOB: ${dob}^FS
-^FO20,110^BY2,2,80^BCN,80,Y,N,N^FD${barcode}^FS`;
+^FO20,18^A0N,32,32^FD${name}^FS
+^FO20,48^A0N,26,26^FDDOB: ${dob}^FS
+^FO20,78^BY2,2,70^BCN,70,Y,N,N^FD${barcode}^FS`;
 
   if (qty > 1) zpl += `\n^PQ${qty},0,1,Y`;
 
-  zpl += `\n^XZ\r\n`; // <-- critical for multi-label jobs
+  zpl += `\n^XZ\r\n`;
   return zpl;
 }
 
-// MobiPrint docs for Android web: Base64 then replace '=' with '_' :contentReference[oaicite:3]{index=3}
+// MobiPrint Android web integration: replace '=' with '_' in base64
 function mobiprintBase64(zpl) {
   let b64 = btoa(zpl);
   return b64.replace(/=/g, "_");
@@ -89,30 +95,29 @@ function buildLinkForPlatform(codeB64, cb) {
     "&x-error=" + encodeURIComponent(cb) +
     "&x-cancel=" + encodeURIComponent(cb);
 
-  // Android: prefer intent with known package id from Play Store :contentReference[oaicite:4]{index=4}
   if (isAndroid) {
+    // Most reliable Android launch:
     const pkg = "com.mobiprintpro.retail.android";
     return "intent://" + qs + "#Intent;scheme=arrowhead;package=" + pkg + ";end";
   }
 
-  // iOS / others: normal scheme
   return "arrowhead://" + qs;
 }
 
 let deepLink = "";
+let callbackUrl = "asana://";
+let androidReturnArmed = false;
 
 function init() {
   const nameParam = getParamFromHash("name");
   const dobParam  = getParamFromHash("dob");
   const itemsParam = getParamFromHash("items");
-  const cb = getParamFromHash("cb") || "asana://";
+  callbackUrl = getParamFromHash("cb") || "asana://";
 
   if (!nameParam || !dobParam || !itemsParam) {
     document.getElementById("debugText").innerText =
       "❌ Missing required params.\n\nUse:\n" +
-      "#name=...&dob=...&items=111*1|222*3&cb=asana://\n\n" +
-      "Example:\n" +
-      "#name=TEST%20PATIENT%20A&dob=02%2F02%2F1992&items=1111111111*1%7C2222222222*3";
+      "#name=...&dob=...&items=111*1|222*3&cb=asana://";
     return;
   }
 
@@ -133,24 +138,42 @@ function init() {
   finalZpl = sanitizeZpl(finalZpl) + "\r\n";
 
   const codeB64 = mobiprintBase64(finalZpl);
-  deepLink = buildLinkForPlatform(codeB64, cb);
+  deepLink = buildLinkForPlatform(codeB64, callbackUrl);
 
   document.getElementById("printBtn").href = deepLink;
 
   document.getElementById("debugText").innerText =
-    "✅ Platform UA:\n" + navigator.userAgent + "\n\n" +
+    "✅ UA:\n" + navigator.userAgent + "\n\n" +
+    "✅ Callback:\n" + callbackUrl + "\n\n" +
     "✅ Base64 length:\n" + codeB64.length + "\n\n" +
     "✅ Deep link:\n" + deepLink + "\n\n" +
-    "✅ ZPL tail (last 120 chars):\n" + finalZpl.slice(-120);
+    "✅ ZPL tail (last 140 chars):\n" + finalZpl.slice(-140);
 }
 
-// User gesture = best reliability
+// ✅ When user returns to browser on Android, jump to Asana
+document.addEventListener("visibilitychange", () => {
+  const isAndroid = /Android/i.test(navigator.userAgent);
+  if (isAndroid && androidReturnArmed && !document.hidden) {
+    window.location.href = callbackUrl;
+  }
+});
+
 document.getElementById("printBtn").onclick = function() {
-  // Clear PHI from address bar shortly after tap (doesn't affect hash being read now)
+  // Clear PHI quickly
   setTimeout(() => {
     history.replaceState(null, "", window.location.pathname);
   }, 400);
-  // DO NOT return to Asana from webpage (you asked Shortcut handles it)
+
+  // Arm Android return: when user comes back to browser, send them to Asana
+  if (/Android/i.test(navigator.userAgent)) {
+    androidReturnArmed = true;
+
+    // Optional timed return fallback (in case user doesn't return)
+    setTimeout(() => {
+      // Only do this if they’re still on this page (not hidden)
+      if (!document.hidden) window.location.href = callbackUrl;
+    }, 6000);
+  }
 };
 
 window.onload = init;
