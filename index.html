@@ -14,6 +14,49 @@
     .debug { margin-top:16px; font-size:12px; color:#222; word-break:break-all; text-align:left; background:#f7f7f7; padding:14px; border-radius:12px; white-space:pre-wrap; border:1px solid #eee; }
     .hint { margin-top:10px; font-size:12px; color:#666; text-align:left; line-height:1.35; }
     .pill { display:inline-block; padding:4px 10px; border-radius:999px; background:#eee; font-size:12px; font-weight:700; margin-bottom:10px; }
+
+    /* NEW: nicer label preview list */
+    .labelPreview { margin-top: 8px; text-align: left; }
+    .labelRow {
+      border: 1px solid #eee;
+      border-radius: 12px;
+      padding: 12px 12px;
+      margin-top: 10px;
+      background: #fff;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.04);
+      position: relative;
+      overflow: hidden;
+    }
+    /* NEW: black top line for sendout (SO) */
+    .labelRow.sendout::before {
+      content: "";
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 8px;
+      background: #000;
+    }
+    .labelMetaTop {
+      display:flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: baseline;
+      margin-bottom: 6px;
+    }
+    .labelTag {
+      display:inline-block;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 800;
+      background:#f2f2f2;
+    }
+    .labelTag.so { background:#000; color:#fff; }
+    .labelTag.ih { background:#e9f7ee; color:#1f7a39; border:1px solid #bfe8cc; }
+    .barcodeLine { font-size: 16px; font-weight: 900; letter-spacing: 0.3px; }
+    .testsLine { margin-top: 6px; font-size: 13px; line-height: 1.25; color:#111; }
+    .sampleTypeLine { margin-top: 4px; font-size: 12px; color:#555; font-weight: 700; }
+    .mutedSmall { font-size: 12px; color:#666; font-weight: 700; }
+
   </style>
 </head>
 
@@ -24,7 +67,11 @@
 
   <div class="sub"><strong>Name:</strong> <span id="patientName">—</span></div>
   <div class="sub"><strong>DOB:</strong> <span id="patientDob">—</span></div>
-  <div class="sub"><strong>Will print:</strong><br><span id="labelList">—</span></div>
+
+  <!-- NEW: label preview blocks (barcode + tests + sample type + SO top line) -->
+  <div class="sub"><strong>Will print:</strong></div>
+  <div id="labelPreview" class="labelPreview">—</div>
+
   <div class="sub"><strong>Total labels:</strong> <span id="totalLabels">—</span></div>
 
   <a id="printBtn" class="btn" href="#">Tap to Print</a><br>
@@ -36,6 +83,24 @@
 </div>
 
 <script>
+/* =========================================================
+   URL FORMAT (NEW)
+   ---------------------------------------------------------
+   #name=<...>
+   &dob=<...>
+   &items=<BARCODE*QTY|BARCODE*QTY|...>
+   &label=<IH|SO|IH|...>
+   &tests=<IH: ...|SO: ...|...>
+   &st=<Serum|Plasma|...>
+   &cb=asana://
+
+   This page renders:
+     - barcode line
+     - tests line (below barcode)
+     - sample type line (below tests)
+     - if label is SO, adds black top bar
+   ========================================================= */
+
 /* ============================
    Helpers
 ============================ */
@@ -43,6 +108,12 @@ function getParamFromHash(key) {
   const hash = window.location.hash.substring(1);
   const params = new URLSearchParams(hash);
   return params.get(key) || "";
+}
+
+function decodePipeList(paramStr) {
+  const decoded = decodeURIComponent(paramStr || "").trim();
+  if (!decoded) return [];
+  return decoded.split("|").map(s => (s || "").trim());
 }
 
 function parseItems(itemsStr) {
@@ -55,6 +126,15 @@ function parseItems(itemsStr) {
     if (!barcode) return null;
     return { barcode, qty: String(parseInt(qty,10) || 1) };
   }).filter(Boolean);
+}
+
+function escapeHtml(s) {
+  return String(s || "")
+    .replace(/&/g,"&amp;")
+    .replace(/</g,"&lt;")
+    .replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;")
+    .replace(/'/g,"&#39;");
 }
 
 /* ============================
@@ -75,20 +155,62 @@ function isAndroid() {
    Android: Build MobiPrint link
 ============================ */
 
-// ZPL: tighter layout (barcode closer to name)
-function buildSingleLabelZpl(name, dob, barcode, qty) {
+/*
+  Does the code have label size?
+  - YES: your ZPL sets ^PW406 and ^LL300 which define print width/length (label size)
+  - If you need a different physical label size, adjust:
+      ^PW (print width dots) and ^LL (label length dots)
+    Also adjust font sizes and barcode height accordingly.
+*/
+
+// ZPL: includes optional black top bar for SO
+function buildSingleLabelZpl(name, dob, barcode, qty, labelType, testsText, sampleType) {
   qty = parseInt(qty || "1", 10);
   if (!qty || qty < 1) qty = 1;
 
+  const isSO = String(labelType || "").toUpperCase() === "SO";
+  const tests = (testsText || "").trim();
+  const st = (sampleType || "").trim();
+
+  // IMPORTANT: Remove non-ascii later in sanitizeZpl
+  // Layout:
+  //  - optional black top bar if SO
+  //  - name
+  //  - dob
+  //  - barcode
+  //  - tests (below barcode)
+  //  - sample type (below tests)
+  //
+  // Dots: ^PW406 is ~2" wide at 203dpi (approx). ^LL300 is label height.
+  // If you need more room for tests, increase ^LL and adjust Y positions.
   let zpl = `^XA
 ^MMT
 ^MNW
 ^PR6
 ^PW406
 ^LL300
-^FO20,18^A0N,32,32^FD${name}^FS
+`;
+
+  if (isSO) {
+    // Black top bar line (full-width rectangle)
+    zpl += `^FO0,0^GB406,12,12^FS\n`;
+  }
+
+  zpl +=
+`^FO20,18^A0N,32,32^FD${name}^FS
 ^FO20,48^A0N,26,26^FDDOB: ${dob}^FS
 ^FO20,78^BY2,2,70^BCN,70,Y,N,N^FD${barcode}^FS`;
+
+  // Tests line below barcode
+  // keep it fairly small; it can wrap if very long (ZPL ^FB)
+  if (tests) {
+    zpl += `\n^FO20,160^A0N,22,22^FB366,3,2,L,0^FD${tests}^FS`;
+  }
+
+  // Sample type line below tests
+  if (st) {
+    zpl += `\n^FO20,232^A0N,20,20^FD${st}^FS`;
+  }
 
   if (qty > 1) zpl += `\n^PQ${qty},0,1,Y`;
 
@@ -100,7 +222,7 @@ function buildSingleLabelZpl(name, dob, barcode, qty) {
 function sanitizeZpl(zpl) {
   zpl = zpl.replace(/^\uFEFF/, "");
   zpl = zpl.replace(/\u00A0/g, " ");
-  zpl = zpl.replace(/[^\x00-\x7F]/g, "");
+  zpl = zpl.replace(/[^\x00-\x7F]/g, ""); // strip non-ascii
   return zpl.trim();
 }
 
@@ -117,7 +239,6 @@ function buildAndroidMobiPrintIntent(codeB64, cb) {
     "&x-error=" + encodeURIComponent(cb) +
     "&x-cancel=" + encodeURIComponent(cb);
 
-  // Android intent launch (reliable)
   const pkg = "com.mobiprintpro.retail.android";
   return "intent://" + qs + "#Intent;scheme=arrowhead;package=" + pkg + ";end";
 }
@@ -125,12 +246,15 @@ function buildAndroidMobiPrintIntent(codeB64, cb) {
 /* ============================
    iOS: Build Shortcut link
 ============================ */
-function buildIOSShortcutURL(name, dob, itemsDecoded, cb) {
+function buildIOSShortcutURL(name, dob, itemsDecoded, labelsDecoded, testsDecoded, stDecoded, cb) {
   const shortcutName = "SMS Print"; // must match shortcut exactly
   const payload =
     `name=${encodeURIComponent(name)}` +
     `&dob=${encodeURIComponent(dob)}` +
     `&items=${encodeURIComponent(itemsDecoded)}` +
+    `&label=${encodeURIComponent(labelsDecoded)}` +
+    `&tests=${encodeURIComponent(testsDecoded)}` +
+    `&st=${encodeURIComponent(stDecoded)}` +
     `&cb=${encodeURIComponent(cb)}`;
 
   return "shortcuts://run-shortcut" +
@@ -152,6 +276,48 @@ function goToAsanaAndTryClose() {
 }
 
 /* ============================
+   Render label preview
+============================ */
+function renderLabelPreview(items, labels, testsList, stList) {
+  const root = document.getElementById("labelPreview");
+  if (!items.length) {
+    root.innerText = "—";
+    return;
+  }
+
+  // Ensure arrays align; fallback to empty strings if missing
+  const maxLen = items.length;
+  const safe = (arr, i) => (arr && arr[i] != null ? arr[i] : "");
+
+  let html = "";
+  for (let i=0; i<maxLen; i++) {
+    const it = items[i];
+    const label = String(safe(labels,i) || "").toUpperCase().trim();
+    const tests = safe(testsList,i) || "";
+    const st = safe(stList,i) || "";
+
+    const isSO = label === "SO";
+    const rowClass = "labelRow" + (isSO ? " sendout" : "");
+    const tagClass = "labelTag " + (isSO ? "so" : "ih");
+    const tagText = isSO ? "SO" : "IH";
+
+    html += `
+      <div class="${rowClass}">
+        <div class="labelMetaTop">
+          <span class="${tagClass}">${tagText}</span>
+          <span class="mutedSmall">Label ${i+1}</span>
+        </div>
+        <div class="barcodeLine">${escapeHtml(it.barcode)} <span class="mutedSmall">x${escapeHtml(it.qty)}</span></div>
+        <div class="testsLine">${escapeHtml(tests)}</div>
+        <div class="sampleTypeLine">${escapeHtml(st)}</div>
+      </div>
+    `;
+  }
+
+  root.innerHTML = html;
+}
+
+/* ============================
    Main
 ============================ */
 let deepLink = "";
@@ -166,43 +332,64 @@ function init() {
   const nameParam = getParamFromHash("name");
   const dobParam  = getParamFromHash("dob");
   const itemsParam = getParamFromHash("items");
+  const labelParam = getParamFromHash("label");
+  const testsParam = getParamFromHash("tests");
+  const stParam    = getParamFromHash("st");
   callbackUrl = getParamFromHash("cb") || "asana://";
 
   if (!nameParam || !dobParam || !itemsParam) {
     document.getElementById("debugText").innerText =
       "❌ Missing required params.\n\nUse:\n" +
-      "#name=...&dob=...&items=111*1|222*3&cb=asana://\n\nExample:\n" +
-      "#name=TEST%20PATIENT&dob=01%2F01%2F1990&items=50019363P1*1%7C50019363S1*1";
+      "#name=...&dob=...&items=111*1|222*3" +
+      "&label=IH|SO&tests=IH:%20CBC|SO:%20TSH&st=Serum|Serum&cb=asana://\n\nExample:\n" +
+      "#name=TEST%20PATIENT&dob=01%2F01%2F1990&items=50019363P1*1%7C50019363S1*1" +
+      "&label=IH%7CSO&tests=IH%3A%20CBC%20%E2%80%A2%20CMP%7CSO%3A%20TSH" +
+      "&st=Serum%7CSerum";
     return;
   }
 
   const name = decodeURIComponent(nameParam);
   const dob  = decodeURIComponent(dobParam);
+
   const items = parseItems(itemsParam);
+  const labelsList = decodePipeList(labelParam);
+  const testsList  = decodePipeList(testsParam);
+  const stList     = decodePipeList(stParam);
 
   document.getElementById("patientName").innerText = name;
   document.getElementById("patientDob").innerText = dob;
 
-  const listLines = items.map((it,i)=>`${i+1}) ${it.barcode}  x${it.qty}`).join("\n");
-  document.getElementById("labelList").innerText = listLines;
+  // NEW: label preview (barcode + tests + sample type, SO has black top bar)
+  renderLabelPreview(items, labelsList, testsList, stList);
 
   const total = items.reduce((s,it)=> s + Math.max(1, parseInt(it.qty,10)||1), 0);
   document.getElementById("totalLabels").innerText = String(total);
 
+  // IMPORTANT: for iOS Shortcut input we pass decoded lists
   const itemsDecoded = decodeURIComponent(itemsParam);
+  const labelsDecoded = decodeURIComponent(labelParam || "");
+  const testsDecoded = decodeURIComponent(testsParam || "");
+  const stDecoded = decodeURIComponent(stParam || "");
 
-  // iOS → Shortcut-only (no Mobiprint prompt most of the time)
+  // iOS → Shortcut link (now includes label/tests/st so shortcut can print them too)
   if (isIOS()) {
-    deepLink = buildIOSShortcutURL(name, dob, itemsDecoded, callbackUrl);
+    deepLink = buildIOSShortcutURL(name, dob, itemsDecoded, labelsDecoded, testsDecoded, stDecoded, callbackUrl);
     document.getElementById("printBtn").href = deepLink;
     document.getElementById("backBtn").style.display = "none";
     document.getElementById("hintText").innerText =
-      "iPhone: This will run the iOS Shortcut “SMS Print”. The Shortcut prints and returns to Asana.";
+      "iPhone: Runs the iOS Shortcut “SMS Print”. Make sure your Shortcut reads label/tests/st fields now.";
   }
 
-  // Android → MobiPrint intent + auto-return to Asana + try close
+  // Android → MobiPrint intent, now prints tests + sample type and adds SO top bar
   else if (isAndroid()) {
-    let finalZpl = items.map(it => buildSingleLabelZpl(name, dob, it.barcode, it.qty)).join("");
+    // Build 1 ZPL label per item line, aligned by index to label/tests/st lists
+    let finalZpl = items.map((it, idx) => {
+      const lbl = (labelsList[idx] || "IH");
+      const t   = (testsList[idx] || "");
+      const st  = (stList[idx] || "");
+      return buildSingleLabelZpl(name, dob, it.barcode, it.qty, lbl, t, st);
+    }).join("");
+
     finalZpl = sanitizeZpl(finalZpl) + "\r\n";
     const codeB64 = mobiprintBase64(finalZpl);
 
@@ -211,16 +398,20 @@ function init() {
 
     document.getElementById("backBtn").style.display = "inline-block";
     document.getElementById("hintText").innerText =
-      "Android: MobiPrint may open as a floating window. This page will auto-return to Asana after you tap Print.";
+      "Android: Prints barcode + tests + sample type. SO labels show a black bar at the top. Auto-returns to Asana after Print.";
 
     // Debug
     document.getElementById("debugText").innerText =
       "✅ Platform: Android\n\n" +
-      "✅ Asana return intent:\n" + asanaIntentAndroid() + "\n\n" +
+      "✅ Callback param:\n" + callbackUrl + "\n\n" +
+      "✅ items:\n" + itemsDecoded + "\n\n" +
+      "✅ label:\n" + labelsDecoded + "\n\n" +
+      "✅ tests:\n" + testsDecoded + "\n\n" +
+      "✅ st:\n" + stDecoded + "\n\n" +
       "✅ Base64 length:\n" + codeB64.length + "\n\n" +
       "✅ MobiPrint intent:\n" + deepLink + "\n\n" +
-      "✅ ZPL tail (last 160 chars):\n" + finalZpl.slice(-160);
-    return; // stop here because we already set debug
+      "✅ ZPL tail (last 200 chars):\n" + finalZpl.slice(-200);
+    return;
   }
 
   else {
@@ -233,8 +424,11 @@ function init() {
   // Debug for iOS/Other
   document.getElementById("debugText").innerText =
     "✅ Platform: " + platform + "\n\n" +
-    "✅ Callback param: " + callbackUrl + "\n\n" +
-    "✅ Will print:\n" + listLines + "\n\n" +
+    "✅ Callback param:\n" + callbackUrl + "\n\n" +
+    "✅ items:\n" + itemsDecoded + "\n\n" +
+    "✅ label:\n" + labelsDecoded + "\n\n" +
+    "✅ tests:\n" + testsDecoded + "\n\n" +
+    "✅ st:\n" + stDecoded + "\n\n" +
     "✅ Deep link:\n" + deepLink;
 }
 
@@ -242,7 +436,7 @@ function init() {
    Click handlers
 ============================ */
 
-// iOS: just clear PHI; Shortcut handles return to Asana
+// iOS: clear PHI; Shortcut handles return to Asana
 // Android: clear PHI and auto-return to Asana + close after timer
 document.getElementById("printBtn").onclick = function() {
   setTimeout(() => {
@@ -269,4 +463,3 @@ window.onhashchange = init;
 
 </body>
 </html>
-
