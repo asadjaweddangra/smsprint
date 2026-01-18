@@ -15,7 +15,7 @@
     .hint { margin-top:10px; font-size:12px; color:#666; text-align:left; line-height:1.35; }
     .pill { display:inline-block; padding:4px 10px; border-radius:999px; background:#eee; font-size:12px; font-weight:700; margin-bottom:10px; }
 
-    /* NEW: nicer label preview list */
+    /* Label preview list */
     .labelPreview { margin-top: 8px; text-align: left; }
     .labelRow {
       border: 1px solid #eee;
@@ -27,7 +27,6 @@
       position: relative;
       overflow: hidden;
     }
-    /* NEW: black top line for sendout (SO) */
     .labelRow.sendout::before {
       content: "";
       position: absolute;
@@ -56,7 +55,6 @@
     .testsLine { margin-top: 6px; font-size: 13px; line-height: 1.25; color:#111; }
     .sampleTypeLine { margin-top: 4px; font-size: 12px; color:#555; font-weight: 700; }
     .mutedSmall { font-size: 12px; color:#666; font-weight: 700; }
-
   </style>
 </head>
 
@@ -68,7 +66,6 @@
   <div class="sub"><strong>Name:</strong> <span id="patientName">—</span></div>
   <div class="sub"><strong>DOB:</strong> <span id="patientDob">—</span></div>
 
-  <!-- NEW: label preview blocks (barcode + tests + sample type + SO top line) -->
   <div class="sub"><strong>Will print:</strong></div>
   <div id="labelPreview" class="labelPreview">—</div>
 
@@ -78,13 +75,12 @@
   <a id="backBtn" class="btnSecondary" href="#" style="display:none;">Back to Asana & Close Tab</a>
 
   <div class="hint" id="hintText"></div>
-
   <div id="debugText" class="debug">Initializing...</div>
 </div>
 
 <script>
 /* =========================================================
-   URL FORMAT (NEW)
+   URL FORMAT
    ---------------------------------------------------------
    #name=<...>
    &dob=<...>
@@ -93,12 +89,6 @@
    &tests=<IH: ...|SO: ...|...>
    &st=<Serum|Plasma|...>
    &cb=asana://
-
-   This page renders:
-     - barcode line
-     - tests line (below barcode)
-     - sample type line (below tests)
-     - if label is SO, adds black top bar
    ========================================================= */
 
 /* ============================
@@ -156,66 +146,56 @@ function isAndroid() {
 ============================ */
 
 /*
-  Does the code have label size?
-  - YES: your ZPL sets ^PW406 and ^LL300 which define print width/length (label size)
-  - If you need a different physical label size, adjust:
-      ^PW (print width dots) and ^LL (label length dots)
-    Also adjust font sizes and barcode height accordingly.
-*/
+  ZPL TEMPLATE (YOU REQUESTED)
 
-// ZPL: includes optional black top bar for SO
+  ^XA
+  ^MMT
+  ^MNM
+  ^PR6
+  ^MD30
+  ^FO0,10^GB385,Border,Border^FS
+  ^FO20,25^A0N,32,32^FDName^FS
+  ^FO20,55^A0N,28,28^FDDOB^FS
+  ^FO20,78^BY2,2,80^BCN,80,Y,N,N^FDBarcode^FS
+  ^FO12,180^A0N,20,20^FDSt^FS
+  ^FO12,200^A0N,20,20^FB350,2,0,L,0^FDTests^FS
+  ^PQQty,0,1,Y
+  ^XZ
+
+  RULE:
+    - If label == "SO" => Border = 15 (black bar)
+    - Else => Border = 0
+*/
 function buildSingleLabelZpl(name, dob, barcode, qty, labelType, testsText, sampleType) {
   qty = parseInt(qty || "1", 10);
   if (!qty || qty < 1) qty = 1;
 
-  const isSO = String(labelType || "").toUpperCase() === "SO";
-  const tests = (testsText || "").trim();
+  const isSO = String(labelType || "").toUpperCase().trim() === "SO";
+  const Border = isSO ? 15 : 0;
+
+  const nm = (name || "").trim();
+  const d  = (dob || "").trim();
+  const bc = (barcode || "").trim();
   const st = (sampleType || "").trim();
+  const tests = (testsText || "").trim();
 
-  // IMPORTANT: Remove non-ascii later in sanitizeZpl
-  // Layout:
-  //  - optional black top bar if SO
-  //  - name
-  //  - dob
-  //  - barcode
-  //  - tests (below barcode)
-  //  - sample type (below tests)
-  //
-  // Dots: ^PW406 is ~2" wide at 203dpi (approx). ^LL300 is label height.
-  // If you need more room for tests, increase ^LL and adjust Y positions.
-  let zpl = `^XA
+  // sanitizeZpl() will strip any non-ascii later.
+  // If you ever need to remove IH:/SO: prefixes, do it here.
+  const zpl =
+`^XA
 ^MMT
-^MNW
+^MNM
 ^PR6
-^PW284
-^LL250
-`;
+^MD30
+^FO0,10^GB385,${Border},${Border}^FS
+^FO20,25^A0N,32,32^FD${nm}^FS
+^FO20,55^A0N,28,28^FD${d}^FS
+^FO20,78^BY2,2,80^BCN,80,Y,N,N^FD${bc}^FS
+^FO12,180^A0N,20,20^FD${st}^FS
+^FO12,200^A0N,20,20^FB350,2,0,L,0^FD${tests}^FS
+^PQ${qty},0,1,Y
+^XZ\r\n`;
 
-  if (isSO) {
-    // Black top bar line (full-width rectangle)
-    zpl += `^FO0,0^GB406,12,12^FS\n`;
-  }
-
-  zpl +=
-`^FO20,18^A0N,32,32^FD${name}^FS
-^FO20,48^A0N,26,26^FDDOB: ${dob}^FS
-^FO20,78^BY2,2,70^BCN,70,Y,N,N^FD${barcode}^FS`;
-
-  // Tests line below barcode
-  // keep it fairly small; it can wrap if very long (ZPL ^FB)
-  if (tests) {
-    zpl += `\n^FO20,160^A0N,22,22^FB366,3,2,L,0^FD${tests}^FS`;
-  }
-
-  // Sample type line below tests
-  if (st) {
-    zpl += `\n^FO20,232^A0N,20,20^FD${st}^FS`;
-  }
-
-  if (qty > 1) zpl += `\n^PQ${qty},0,1,Y`;
-
-  // critical separator for multi-label
-  zpl += `\n^XZ\r\n`;
   return zpl;
 }
 
@@ -285,7 +265,6 @@ function renderLabelPreview(items, labels, testsList, stList) {
     return;
   }
 
-  // Ensure arrays align; fallback to empty strings if missing
   const maxLen = items.length;
   const safe = (arr, i) => (arr && arr[i] != null ? arr[i] : "");
 
@@ -329,8 +308,8 @@ function init() {
   platform = isIOS() ? "iOS" : (isAndroid() ? "Android" : "Other");
   document.getElementById("platformPill").innerText = platform;
 
-  const nameParam = getParamFromHash("name");
-  const dobParam  = getParamFromHash("dob");
+  const nameParam  = getParamFromHash("name");
+  const dobParam   = getParamFromHash("dob");
   const itemsParam = getParamFromHash("items");
   const labelParam = getParamFromHash("label");
   const testsParam = getParamFromHash("tests");
@@ -341,9 +320,9 @@ function init() {
     document.getElementById("debugText").innerText =
       "❌ Missing required params.\n\nUse:\n" +
       "#name=...&dob=...&items=111*1|222*3" +
-      "&label=IH|SO&tests=IH:%20CBC|SO:%20TSH&st=Serum|Serum&cb=asana://\n\nExample:\n" +
+      "&label=IH|SO&tests=IH:%20CBC,%20CMP|SO:%20TSH&st=Serum|Serum&cb=asana://\n\nExample:\n" +
       "#name=TEST%20PATIENT&dob=01%2F01%2F1990&items=50019363P1*1%7C50019363S1*1" +
-      "&label=IH%7CSO&tests=IH%3A%20CBC%20%E2%80%A2%20CMP%7CSO%3A%20TSH" +
+      "&label=IH%7CSO&tests=IH%3A%20CBC%2C%20CMP%7CSO%3A%20TSH" +
       "&st=Serum%7CSerum";
     return;
   }
@@ -359,30 +338,28 @@ function init() {
   document.getElementById("patientName").innerText = name;
   document.getElementById("patientDob").innerText = dob;
 
-  // NEW: label preview (barcode + tests + sample type, SO has black top bar)
   renderLabelPreview(items, labelsList, testsList, stList);
 
   const total = items.reduce((s,it)=> s + Math.max(1, parseInt(it.qty,10)||1), 0);
   document.getElementById("totalLabels").innerText = String(total);
 
-  // IMPORTANT: for iOS Shortcut input we pass decoded lists
-  const itemsDecoded = decodeURIComponent(itemsParam);
+  // decoded strings for debug + iOS shortcut
+  const itemsDecoded  = decodeURIComponent(itemsParam);
   const labelsDecoded = decodeURIComponent(labelParam || "");
-  const testsDecoded = decodeURIComponent(testsParam || "");
-  const stDecoded = decodeURIComponent(stParam || "");
+  const testsDecoded  = decodeURIComponent(testsParam || "");
+  const stDecoded     = decodeURIComponent(stParam || "");
 
-  // iOS → Shortcut link (now includes label/tests/st so shortcut can print them too)
+  // iOS → Shortcut link
   if (isIOS()) {
     deepLink = buildIOSShortcutURL(name, dob, itemsDecoded, labelsDecoded, testsDecoded, stDecoded, callbackUrl);
     document.getElementById("printBtn").href = deepLink;
     document.getElementById("backBtn").style.display = "none";
     document.getElementById("hintText").innerText =
-      "iPhone: Runs the iOS Shortcut “SMS Print”. Make sure your Shortcut reads label/tests/st fields now.";
+      "iPhone: Runs the iOS Shortcut “SMS Print”. Make sure your Shortcut reads label/tests/st fields.";
   }
 
-  // Android → MobiPrint intent, now prints tests + sample type and adds SO top bar
+  // Android → MobiPrint intent (uses your exact ZPL template)
   else if (isAndroid()) {
-    // Build 1 ZPL label per item line, aligned by index to label/tests/st lists
     let finalZpl = items.map((it, idx) => {
       const lbl = (labelsList[idx] || "IH");
       const t   = (testsList[idx] || "");
@@ -398,9 +375,8 @@ function init() {
 
     document.getElementById("backBtn").style.display = "inline-block";
     document.getElementById("hintText").innerText =
-      "Android: Prints barcode + tests + sample type. SO labels show a black bar at the top. Auto-returns to Asana after Print.";
+      "Android: Prints using the requested ZPL template. SO labels use Border=15 (black bar). Auto-returns to Asana after Print.";
 
-    // Debug
     document.getElementById("debugText").innerText =
       "✅ Platform: Android\n\n" +
       "✅ Callback param:\n" + callbackUrl + "\n\n" +
@@ -435,10 +411,8 @@ function init() {
 /* ============================
    Click handlers
 ============================ */
-
-// iOS: clear PHI; Shortcut handles return to Asana
-// Android: clear PHI and auto-return to Asana + close after timer
 document.getElementById("printBtn").onclick = function() {
+  // Clear PHI from URL after click
   setTimeout(() => {
     history.replaceState(null, "", window.location.pathname);
   }, 350);
@@ -451,7 +425,6 @@ document.getElementById("printBtn").onclick = function() {
   }
 };
 
-// Manual return for Android
 document.getElementById("backBtn").onclick = function(e) {
   e.preventDefault();
   goToAsanaAndTryClose();
@@ -463,4 +436,3 @@ window.onhashchange = init;
 
 </body>
 </html>
-
