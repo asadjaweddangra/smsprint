@@ -165,22 +165,26 @@ function renderLabels() {
 function executePrint() {
     const cleanZpl = finalZpl.replace(/[^\x00-\x7F]/g, ""); // Remove non-ASCII
     const b64 = btoa(cleanZpl).replace(/=/g, "_");
+    
+    // Capture the current URL to tell MobiPrint where to return to
+    const returnUrl = window.location.href;
 
     if (isWindows()) {
         printViaSerial(finalZpl);
     } 
     else if (isAndroid()) {
         if (ANDROID_MODE === "ARROWHEAD") {
-            window.location.href = `intent://x-callback-url/zplcode?code=${b64}#Intent;scheme=arrowhead;package=com.mobiprintpro.retail.android;end`;
+            // Android uses x-success in the intent
+            window.location.href = `intent://x-callback-url/zplcode?code=${b64}&x-success=${encodeURIComponent(returnUrl)}#Intent;scheme=arrowhead;package=com.mobiprintpro.retail.android;end`;
         } else {
-            // Android can trigger Shortcuts if an app like 'Tasker' or 'Shortcuts' is used, 
-            // but usually this goes to a Shortcut link
             window.location.href = "shortcuts://run-shortcut?name=SMS-Print&text=" + encodeURIComponent(window.location.hash.substring(1));
         }
     } 
     else if (isIOS()) {
         if (IOS_MODE === "ARROWHEAD") {
-            window.location.href = `arrowhead://x-callback-url/zplcode?code=${encodeURIComponent(b64)}`;
+            // iOS: Added x-success parameter to the arrowhead scheme
+            // This tells MobiPrint to redirect back to this page after printing
+            window.location.href = `arrowhead://x-callback-url/zplcode?code=${encodeURIComponent(b64)}&x-success=${encodeURIComponent(returnUrl)}`;
         } else {
             window.location.href = "shortcuts://run-shortcut?name=SMS-Print&input=text&text=" + encodeURIComponent(window.location.hash.substring(1));
         }
@@ -229,3 +233,4 @@ window.onload = init;
 </script>
 </body>
 </html>
+
