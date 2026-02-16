@@ -3,64 +3,62 @@
 <head>
   <title>SMS Print</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <script src="https://cdn.jsdelivr.net/gh/ZebraZebra/BrowserPrint-Zebra-JS@master/BrowserPrint-3.0.216.min.js"></script>
-  
   <style>
+    /* UI STYLES (What you see on screen) */
     body { font-family: -apple-system, sans-serif; text-align: center; padding: 28px 16px; background: #fff; }
     .card { max-width: 600px; margin: 0 auto; background: #fff; border-radius: 14px; padding: 18px; box-shadow: 0 4px 14px rgba(0,0,0,0.08); }
     .title { font-size: 20px; font-weight: 800; margin: 0 0 10px; }
     .sub { font-size: 16px; margin: 0 0 6px; text-align:left; }
     .sub strong { font-weight: 800; }
     .btn { display:inline-block; padding:18px 34px; margin-top:16px; background:#28a745; color:#fff; text-decoration:none; border-radius:12px; font-size:20px; font-weight:800; border:none; cursor:pointer; width: 100%; box-sizing: border-box; }
-    .btn.loading { background:#6c757d; cursor: wait; }
     .btnSecondary { display:inline-block; padding:14px 22px; margin-top:10px; background:#111; color:#fff; text-decoration:none; border-radius:12px; font-size:15px; font-weight:800; }
-    .debug { margin-top:16px; font-size:12px; color:#222; word-break:break-all; text-align:left; background:#f7f7f7; padding:14px; border-radius:12px; white-space:pre-wrap; border:1px solid #eee; }
-    .hint { margin-top:10px; font-size:12px; color:#666; text-align:left; line-height:1.35; }
     .pill { display:inline-block; padding:4px 10px; border-radius:999px; background:#eee; font-size:12px; font-weight:700; margin-bottom:10px; }
-    .labelPreview { margin-top: 8px; text-align: left; }
-    .labelRow { border: 1px solid #eee; border-radius: 12px; padding: 12px; margin-top: 10px; background: #fff; position: relative; overflow: hidden; }
+    
+    /* Label Preview Row */
+    .labelRow { border: 1px solid #eee; border-radius: 12px; padding: 12px; margin-top: 10px; text-align: left; position: relative; overflow: hidden; }
     .labelRow.sendout::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 8px; background: #000; }
-    .labelTag { display:inline-block; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 800; background:#f2f2f2; }
-    .labelTag.so { background:#000; color:#fff; }
-    .labelTag.ih { background:#e9f7ee; color:#1f7a39; border:1px solid #bfe8cc; }
     .barcodeLine { font-size: 16px; font-weight: 900; }
-    .mutedSmall { font-size: 12px; color:#666; font-weight: 700; }
+
+    /* PRINT STYLES (What the printer sees) */
+    @media print {
+      body * { visibility: hidden; }
+      #printArea, #printArea * { visibility: visible; }
+      #printArea { position: absolute; left: 0; top: 0; width: 100%; }
+      .print-page { 
+        width: 3in; height: 1in; /* ADJUST TO YOUR LABEL SIZE */
+        page-break-after: always; 
+        padding: 5px;
+        box-sizing: border-box;
+        border: none;
+        text-align: left;
+      }
+      .print-so-bar { height: 12px; background: black !important; -webkit-print-color-adjust: exact; margin-bottom: 4px; }
+      .print-name { font-size: 12pt; font-weight: bold; margin: 0; }
+      .print-dob { font-size: 10pt; margin: 0; }
+      .print-barcode { font-size: 14pt; font-weight: bold; margin: 4px 0; font-family: monospace; }
+      .print-tests { font-size: 8pt; line-height: 1.1; }
+    }
   </style>
 </head>
 
 <body>
 <div class="card">
   <div id="platformPill" class="pill">Detecting platform…</div>
-  <div class="title">✅ Verify Before Printing</div>
+  <div class="title">✅ Verify & Print</div>
 
   <div class="sub"><strong>Name:</strong> <span id="patientName">—</span></div>
   <div class="sub"><strong>DOB:</strong> <span id="patientDob">—</span></div>
+  <div id="labelPreview"></div>
 
-  <div class="sub"><strong>Will print:</strong></div>
-  <div id="labelPreview" class="labelPreview">—</div>
-
-  <div class="sub"><strong>Total labels:</strong> <span id="totalLabels">—</span></div>
-
-  <button id="printBtn" class="btn loading">Initializing...</button><br>
+  <button id="printBtn" class="btn">Print Labels</button><br>
   <a id="backBtn" class="btnSecondary" href="#" style="display:none;">Back to Asana</a>
-
-  <div id="hintText" class="hint"></div>
-  <div id="debugText" class="debug">System Booting...</div>
 </div>
 
-<script>
-/* ============================
-   Core Variables
-============================ */
-let activeDevice = null;
-let finalZpl = "";
+<div id="printArea"></div>
 
-/* ============================
-   Helper Functions
-============================ */
-const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-const isAndroid = () => /Android/i.test(navigator.userAgent);
+<script>
 const isWindows = () => /Win/i.test(navigator.platform);
+const isAndroid = () => /Android/i.test(navigator.userAgent);
 
 function getParam(key) {
   const hash = window.location.hash.substring(1);
@@ -68,114 +66,56 @@ function getParam(key) {
   return params.get(key) || "";
 }
 
-function buildZpl(name, dob, barcode, qty, labelType, tests, st) {
-  const isSO = (labelType || "").toUpperCase() === "SO";
-  const border = isSO ? 15 : 0;
-  return `^XA^MMT^MNM^PR6^MD30^FO0,10^GB385,${border},${border}^FS^FO20,25^A0N,32,32^FD${name}^FS^FO20,55^A0N,28,28^FD${dob}^FS^FO20,78^BY2,2,80^BCN,80,Y,N,N^FD${barcode}^FS^FO12,180^A0N,20,20^FD${st}^FS^FO12,200^A0N,20,20^FB350,2,0,L,0^FD${tests}^FS^PQ${qty},0,1,Y^XZ\r\n`;
-}
-
-/* ============================
-   Windows Printer Connection
-============================ */
-function setupWindowsPrinter() {
-  const btn = document.getElementById("printBtn");
-  const dbg = document.getElementById("debugText");
-
-  dbg.innerText = "Attempting to connect to Zebra Service...";
-
-  BrowserPrint.getDefaultDevice("printer", function(device) {
-    if (device && device.name) {
-      activeDevice = device;
-      btn.innerText = "Print to " + device.name;
-      btn.classList.remove("loading");
-      dbg.innerText = "Connected to: " + device.name;
-      
-      btn.onclick = function() {
-        btn.innerText = "Sending...";
-        activeDevice.send(finalZpl, 
-          function() { 
-            btn.innerText = "Print to " + device.name;
-            dbg.innerText = "Success: Label sent to printer."; 
-          }, 
-          function(err) { 
-            alert("Printer Error: " + err); 
-            btn.innerText = "Error - Try Again";
-          }
-        );
-      };
-    } else {
-      btn.innerText = "Printer Not Found";
-      dbg.innerText = "Could not find a default Zebra device. Please check Zebra Browser Print app settings.";
-    }
-  }, function(err) {
-    dbg.innerText = "Service Error: Is the Zebra Browser Print app running?";
-    btn.innerText = "Service Not Found";
-  });
-}
-
-/* ============================
-   Main Logic
-============================ */
 function init() {
-  const platform = isIOS() ? "iOS" : (isAndroid() ? "Android" : (isWindows() ? "Windows" : "Other"));
-  document.getElementById("platformPill").innerText = platform;
-
   const name = decodeURIComponent(getParam("name"));
   const dob = decodeURIComponent(getParam("dob"));
   const itemsStr = decodeURIComponent(getParam("items"));
   const labels = decodeURIComponent(getParam("label")).split("|");
   const tests = decodeURIComponent(getParam("tests")).split("|");
   const st = decodeURIComponent(getParam("st")).split("|");
-  const cb = getParam("cb") || "asana://";
-
-  if (!name || !itemsStr) {
-    document.getElementById("debugText").innerText = "❌ Missing URL data.";
-    return;
-  }
 
   document.getElementById("patientName").innerText = name;
   document.getElementById("patientDob").innerText = dob;
 
-  // Build Preview & Final ZPL
-  let previewHtml = "";
-  finalZpl = "";
   const itemParts = itemsStr.split("|");
-  
+  const printArea = document.getElementById("printArea");
+  let previewHtml = "";
+
   itemParts.forEach((part, i) => {
     let [bc, qty] = part.split("*");
-    qty = qty || 1;
+    qty = parseInt(qty) || 1;
     const isSO = (labels[i] || "").toUpperCase() === "SO";
-    
+
+    // 1. Build the UI Preview
     previewHtml += `<div class="labelRow ${isSO ? 'sendout' : ''}">
-      <span class="labelTag ${isSO ? 'so' : 'ih'}">${isSO ? 'SO' : 'IH'}</span>
       <div class="barcodeLine">${bc} x${qty}</div>
-      <div class="mutedSmall">${st[i] || ''} - ${tests[i] || ''}</div>
+      <div style="font-size:12px;">${st[i] || ''} - ${tests[i] || ''}</div>
     </div>`;
-    
-    finalZpl += buildZpl(name, dob, bc, qty, labels[i], tests[i], st[i]);
+
+    // 2. Build the System Print Pages
+    for(let q=0; q < qty; q++) {
+      const page = document.createElement("div");
+      page.className = "print-page";
+      page.innerHTML = `
+        ${isSO ? '<div class="print-so-bar"></div>' : ''}
+        <div class="print-name">${name}</div>
+        <div class="print-dob">DOB: ${dob}</div>
+        <div class="print-barcode">${bc}</div>
+        <div class="print-tests">${st[i] || ''}<br>${tests[i] || ''}</div>
+      `;
+      printArea.appendChild(page);
+    }
   });
 
   document.getElementById("labelPreview").innerHTML = previewHtml;
-  document.getElementById("totalLabels").innerText = itemParts.length;
 
-  // Handle Action by Platform
   const btn = document.getElementById("printBtn");
-
-  if (platform === "Windows") {
-    setupWindowsPrinter();
-  } else if (platform === "Android") {
-    btn.innerText = "Tap to Print (Android)";
-    btn.classList.remove("loading");
-    const b64 = btoa(finalZpl.replace(/[^\x00-\x7F]/g, "")).replace(/=/g, "_");
-    btn.onclick = function() {
-      window.location.href = `intent://x-callback-url/zplcode?code=${b64}&x-success=${encodeURIComponent(cb)}#Intent;scheme=arrowhead;package=com.mobiprintpro.retail.android;end`;
-    };
-  } else if (platform === "iOS") {
-    btn.innerText = "Tap to Print (iOS)";
-    btn.classList.remove("loading");
-    btn.onclick = function() {
-      window.location.href = "shortcuts://run-shortcut?name=SMS%20Print&input=text&text=" + encodeURIComponent(window.location.hash.substring(1));
-    };
+  if (isWindows()) {
+    document.getElementById("platformPill").innerText = "Windows System Print";
+    btn.onclick = () => window.print(); // Triggers System Print
+  } else if (isAndroid()) {
+    document.getElementById("platformPill").innerText = "Android (MobiPrint)";
+    // ... Android ZPL/Intent Logic here
   }
 }
 
