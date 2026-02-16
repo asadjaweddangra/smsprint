@@ -12,25 +12,22 @@
     .btn { display:inline-block; padding:18px 34px; margin-top:16px; background:#007bff; color:#fff; text-decoration:none; border-radius:12px; font-size:20px; font-weight:800; border:none; cursor:pointer; width: 100%; box-sizing: border-box; }
     .pill { display:inline-block; padding:4px 10px; border-radius:999px; background:#eee; font-size:12px; font-weight:700; margin-bottom:10px; }
     
-    /* Label Row UI */
     .labelRow { border: 1px solid #eee; border-radius: 12px; padding: 12px; margin-top: 10px; text-align: left; position: relative; overflow: hidden; }
     .labelRow.sendout::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 8px; background: #000; }
 
-    /* PRINT STYLES - Only applied when printing */
+    /* PRINT STYLES - What the printer sees */
     @media print {
       body * { visibility: hidden; }
       #printArea, #printArea * { visibility: visible; }
       #printArea { position: absolute; left: 0; top: 0; width: 100%; }
       .print-page { 
-        width: 3in; height: 1in; /* ADJUST THIS TO MATCH YOUR PHYSICAL LABELS */
+        width: 3in; height: 1in; /* Adjust based on your label size */
         page-break-after: always; 
         padding: 5px;
         box-sizing: border-box;
-        text-align: left;
       }
       .print-so-bar { height: 12px; background: black !important; -webkit-print-color-adjust: exact; margin-bottom: 4px; }
       .print-name { font-size: 12pt; font-weight: bold; margin: 0; }
-      .print-dob { font-size: 10pt; margin: 0; }
       .print-barcode { font-size: 14pt; font-weight: bold; margin: 4px 0; font-family: monospace; }
     }
   </style>
@@ -58,9 +55,9 @@ function getParam(key) {
 }
 
 function init() {
-  const name = decodeURIComponent(getParam("name") || "Charles Boyd");
-  const dob = decodeURIComponent(getParam("dob") || "06/19/1939");
-  const itemsStr = decodeURIComponent(getParam("items") || "60004624S1*1");
+  const name = decodeURIComponent(getParam("name") || "Patient Name");
+  const dob = decodeURIComponent(getParam("dob") || "DOB");
+  const itemsStr = decodeURIComponent(getParam("items") || "");
   const labels = decodeURIComponent(getParam("label")).split("|");
   const tests = decodeURIComponent(getParam("tests")).split("|");
   const st = decodeURIComponent(getParam("st")).split("|");
@@ -77,22 +74,20 @@ function init() {
     qty = parseInt(qty) || 1;
     const isSO = (labels[i] || "").toUpperCase() === "SO";
 
-    // Build the UI Preview
     previewHtml += `<div class="labelRow ${isSO ? 'sendout' : ''}">
       <div style="font-weight:900;">${bc} x${qty}</div>
       <div style="font-size:12px;">${st[i] || ''} - ${tests[i] || ''}</div>
     </div>`;
 
-    // Build the actual pages for System Print
     for(let q=0; q < qty; q++) {
       const page = document.createElement("div");
       page.className = "print-page";
       page.innerHTML = `
         ${isSO ? '<div class="print-so-bar"></div>' : ''}
         <div class="print-name">${name}</div>
-        <div class="print-dob">DOB: ${dob}</div>
+        <div>DOB: ${dob}</div>
         <div class="print-barcode">${bc}</div>
-        <div class="print-tests">${st[i] || ''}<br>${tests[i] || ''}</div>
+        <div style="font-size:8pt;">${st[i] || ''}<br>${tests[i] || ''}</div>
       `;
       printArea.appendChild(page);
     }
@@ -101,6 +96,7 @@ function init() {
   document.getElementById("labelPreview").innerHTML = previewHtml;
 }
 
+// Run immediately on load
 window.onload = init;
 </script>
 </body>
