@@ -1,9 +1,10 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Specimen Collection Pro</title>
+  <title>SMS Specimen Portal</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
+    /* UI STYLES */
     body { font-family: -apple-system, sans-serif; text-align: center; padding: 20px 16px; background: #f4f7f6; color: #111; }
     .card { max-width: 500px; margin: 0 auto; background: #fff; border-radius: 16px; padding: 24px; box-shadow: 0 8px 30px rgba(0,0,0,0.1); }
     
@@ -13,6 +14,7 @@
     .title { font-size: 22px; font-weight: 800; margin-bottom: 15px; }
     .patient-box { background: #f8f9fa; padding: 15px; border-radius: 12px; text-align: left; margin-bottom: 20px; border-left: 5px solid #007bff; }
     
+    /* LABEL PREVIEW */
     .labelPreview { margin-top: 8px; text-align: left; }
     .labelRow { border: 1px solid #eee; border-radius: 12px; padding: 12px; margin-top: 10px; background: #fff; position: relative; overflow: hidden; }
     .labelRow.sendout::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 8px; background: #000; }
@@ -23,6 +25,7 @@
     .barcodeLine { font-size: 16px; font-weight: 900; letter-spacing: 0.3px; }
     .testsLine { margin-top: 6px; font-size: 13px; color:#111; line-height: 1.2; }
     
+    /* BUTTONS */
     .btn { display: block; width: 100%; padding: 18px; margin-top: 12px; border-radius: 12px; font-size: 18px; font-weight: 700; border: none; cursor: pointer; text-decoration: none; box-sizing: border-box; }
     .btn-print { background: #007bff; color: white; }
     .btn-success { background: #28a745; color: white; }
@@ -36,7 +39,7 @@
 <body>
 
 <div class="card">
-  <div id="platformPill" class="pill">Detecting...</div>
+  <div id="platformPill" class="pill">Detecting Platform...</div>
 
   <div id="printView">
     <div class="title">1. Verify & Print</div>
@@ -44,17 +47,23 @@
       <strong>Patient:</strong> <span id="name">—</span><br>
       <strong>DOB:</strong> <span id="dob">—</span>
     </div>
-    <div class="labelPreview" id="labelPreview">Preparing labels...</div>
+    <div class="labelPreview" id="labelPreview">Loading labels...</div>
     <button id="printBtn" class="btn btn-print">🖨️ Print Labels</button>
   </div>
 
   <div id="confirmView">
     <div class="title">2. Collection Status</div>
-    <p style="font-size: 14px; color: #555;">Labels sent to printer. Attach labels to tubes, then confirm:</p>
+    <p style="font-size: 14px; color: #555; text-align: left;">
+        1. Verify Patient ID.<br>
+        2. Verify Labels match tubes.<br>
+        3. Confirm collection outcome below:
+    </p>
+    
     <button onclick="handleOutcome('SUCCESS')" class="btn btn-success">✅ Yes, Collection Complete</button>
     <button onclick="handleOutcome('HANDWRITE')" class="btn btn-warn">✍️ Printer Failed (Hand-write)</button>
     <button onclick="handleOutcome('REFUSED')" class="btn btn-danger">❌ Unable to Draw / Refused</button>
-    <button onclick="resetWorkflow()" style="background:none; border:none; color:#007bff; margin-top:15px; cursor:pointer; font-weight:bold;">← Reprint Labels</button>
+    
+    <button onclick="location.reload()" style="background:none; border:none; color:#007bff; margin-top:15px; cursor:pointer; font-weight:bold; font-size: 14px;">← Reprint Labels</button>
   </div>
 
   <div id="debug" class="debug">System Ready.</div>
@@ -62,11 +71,26 @@
 
 <script>
 /* ============================================================
-   CONFIGURATION
+   1. CONFIGURATION
    ============================================================ */
-const ANDROID_MODE = "ARROWHEAD"; 
-const IOS_MODE     = "SHORTCUT"; 
+const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz0DkL9v-VGBqXOtDpby2nDEwvNjtkmoxsTHpaNTH_O8FjKLh17eCq8spP5lly4NwJJoQ/exec"; 
+const IOS_MODE = "SHORTCUT"; 
+const ANDROID_MODE = "ARROWHEAD";
 
+/* ============================================================
+   2. BARCODE TO ORDER CODE CONVERSION
+   Logic: Ignore index 0, Ignore last 2. Prefix SM2(FirstDigit)-
+   ============================================================ */
+function convertBarcodeToOrderCode(barcode) {
+    if (!barcode || barcode.length < 5) return barcode;
+    const firstDigit = barcode.charAt(0);
+    const middlePart = barcode.substring(1, barcode.length - 2);
+    return `SM2${firstDigit}-${middlePart}`;
+}
+
+/* ============================================================
+   3. PLATFORM DETECTION & GLOBALS
+   ============================================================ */
 const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 const isAndroid = () => /Android/i.test(navigator.userAgent);
 const isWindows = () => /Win/.test(navigator.platform);
@@ -74,49 +98,62 @@ const isWindows = () => /Win/.test(navigator.platform);
 let patientData = {};
 let finalZpl = "";
 
+/* ============================================================
+   4. INITIALIZATION
+   ============================================================ */
 function init() {
     const hash = window.location.hash.substring(1);
     const params = new URLSearchParams(hash);
     
-    const os = isIOS() ? "iOS" : (isAndroid() ? "Android" : (isWindows() ? "Windows" : "Unknown"));
-    document.getElementById("platformPill").innerText = `${os} Mode: ${isIOS() ? IOS_MODE : ANDROID_MODE}`;
+    document.getElementById("platformPill").innerText = isIOS() ? "iOS" : (isAndroid() ? "Android" : "Windows");
+
+    const rawItems = decodeURIComponent(params.get("items") || "");
+    const firstBarcode = rawItems.split("|")[0].split("*")[0];
 
     patientData = {
         name: decodeURIComponent(params.get("name") || ""),
         dob: decodeURIComponent(params.get("dob") || ""),
-        items: decodeURIComponent(params.get("items") || "").split("|"),
+        order_code: convertBarcodeToOrderCode(firstBarcode),
+        items: rawItems.split("|"),
         label: decodeURIComponent(params.get("label") || "").split("|"),
         tests: decodeURIComponent(params.get("tests") || "").split("|"),
         st: decodeURIComponent(params.get("st") || "").split("|"),
         cb: params.get("cb") || "asana://"
     };
 
-    if(!patientData.name || !patientData.items[0]) {
-        document.getElementById("labelPreview").innerText = "Error: Missing Patient Data";
+    if(!patientData.name) {
+        document.getElementById("labelPreview").innerText = "Waiting for data from Asana...";
         return;
     }
 
     document.getElementById("name").innerText = patientData.name;
     document.getElementById("dob").innerText = patientData.dob;
+    
     renderLabels();
 
     document.getElementById("printBtn").onclick = () => {
-        // 1. Switch UI First (So if the app crashes, the user is already on step 2)
+        executePrint();
+        // Shift View
         document.getElementById("printView").style.display = "none";
         document.getElementById("confirmView").style.display = "block";
-        
-        // 2. Execute Print
-        executePrint();
+        window.scrollTo(0,0);
+        // Privacy Scrub
+        setTimeout(() => { history.replaceState(null, "", window.location.pathname); }, 500);
     };
 }
 
+/* ============================================================
+   5. LABEL RENDERING & ZPL GENERATION
+   ============================================================ */
 function renderLabels() {
     let uiHtml = "";
     finalZpl = "";
+
     patientData.items.forEach((item, i) => {
         if (!item) return;
         let [bc, qty] = item.split("*");
         qty = parseInt(qty) || 1;
+        
         const lblType = (patientData.label[i] || "IH").toUpperCase();
         const tst = patientData.tests[i] || "";
         const stype = patientData.st[i] || "";
@@ -140,54 +177,67 @@ function renderLabels() {
         finalZpl += `^FO12,200^A0N,20,20^FB350,2,0,L,0^FD${tst.substring(0,60)}^FS`;
         finalZpl += `^PQ${qty},0,1,Y^XZ\r\n`;
     });
+
     document.getElementById("labelPreview").innerHTML = uiHtml;
 }
 
+/* ============================================================
+   6. PRINT EXECUTION
+   ============================================================ */
 function executePrint() {
     const cleanZpl = finalZpl.replace(/[^\x00-\x7F]/g, ""); 
     const b64 = btoa(cleanZpl).replace(/=/g, "_");
-    
-    // We send a simplified return URL to avoid iOS buffer limits
-    const returnUrl = window.location.origin + window.location.pathname + window.location.hash;
+    const returnUrl = window.location.href;
 
     if (isWindows()) {
         printViaSerial(finalZpl);
     } 
     else if (isAndroid()) {
-        if (ANDROID_MODE === "ARROWHEAD") {
-            window.location.href = `intent://x-callback-url/zplcode?code=${b64}&x-success=${encodeURIComponent(returnUrl)}#Intent;scheme=arrowhead;package=com.mobiprintpro.retail.android;end`;
-        } else {
-            window.location.href = "shortcuts://run-shortcut?name=SMS-Print&text=" + encodeURIComponent(window.location.hash.substring(1));
-        }
+        window.location.href = `intent://x-callback-url/zplcode?code=${b64}&x-success=${encodeURIComponent(returnUrl)}#Intent;scheme=arrowhead;package=com.mobiprintpro.retail.android;end`;
     } 
     else if (isIOS()) {
         if (IOS_MODE === "ARROWHEAD") {
-            // Updated iOS Arrowhead string with explicit success callback
-            const iosLink = `arrowhead://x-callback-url/zplcode?code=${encodeURIComponent(b64)}&x-success=${encodeURIComponent(returnUrl)}&x-source=Browser`;
-            window.location.href = iosLink;
+            window.location.href = `arrowhead://x-callback-url/zplcode?code=${encodeURIComponent(b64)}&x-success=${encodeURIComponent(returnUrl)}`;
         } else {
-            window.location.href = "shortcuts://run-shortcut?name=SMSPrint&input=text&text=" + encodeURIComponent(window.location.hash.substring(1));
+            window.location.href = "shortcuts://run-shortcut?name=SMS-Print&input=text&text=" + encodeURIComponent(window.location.hash.substring(1));
         }
     }
 }
 
-function resetWorkflow() {
-    document.getElementById("confirmView").style.display = "none";
-    document.getElementById("printView").style.display = "block";
-}
+/* ============================================================
+   7. ASANA OUTCOME HANDLER (Google Script Bridge)
+   ============================================================ */
+async function handleOutcome(status) {
+    const debugDiv = document.getElementById("debug");
+    debugDiv.innerText = `Updating Asana Task for Order: ${patientData.order_code}...`;
 
-function handleOutcome(status) {
-    const cb = patientData.cb;
-    if (status === 'SUCCESS') {
-        window.location.href = cb;
-    } else if (status === 'HANDWRITE') {
-        const separator = cb.includes('?') ? '&' : '?';
-        window.location.href = `${cb}${separator}status=handwritten`;
-    } else {
-        window.location.href = "asana://";
+    try {
+        await fetch(GOOGLE_SCRIPT_URL, {
+            method: "POST",
+            mode: "no-cors", 
+            body: JSON.stringify({ 
+                order_code: patientData.order_code, 
+                outcome: status 
+            })
+        });
+        debugDiv.innerText = "✅ Asana Task Updated.";
+    } catch (e) {
+        debugDiv.innerText = "⚠️ Network issue. Please check Asana manually.";
     }
+
+    // Final Redirect
+    setTimeout(() => {
+        if (status === 'REFUSED') {
+            window.location.href = "asana://";
+        } else {
+            window.location.href = patientData.cb;
+        }
+    }, 1200);
 }
 
+/* ============================================================
+   8. WINDOWS SERIAL ENGINE
+   ============================================================ */
 async function printViaSerial(zpl) {
     try {
         const port = await navigator.serial.requestPort();
@@ -203,5 +253,3 @@ window.onload = init;
 </script>
 </body>
 </html>
-
-
