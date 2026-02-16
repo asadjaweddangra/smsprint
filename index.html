@@ -4,6 +4,7 @@
   <title>Specimen Collection Workflow</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
+    /* UI STYLES */
     body { font-family: -apple-system, sans-serif; text-align: center; padding: 20px 16px; background: #f4f7f6; color: #111; }
     .card { max-width: 500px; margin: 0 auto; background: #fff; border-radius: 16px; padding: 24px; box-shadow: 0 8px 30px rgba(0,0,0,0.1); }
     
@@ -14,28 +15,40 @@
     .title { font-size: 22px; font-weight: 800; margin-bottom: 15px; }
     .patient-box { background: #f8f9fa; padding: 15px; border-radius: 12px; text-align: left; margin-bottom: 20px; border-left: 5px solid #007bff; }
     
-    .labelRow { border: 1px solid #eee; border-radius: 12px; padding: 12px; margin-top: 10px; text-align: left; position: relative; }
-    .labelRow.sendout { border-top: 8px solid #000; }
+    /* RICH LABEL PREVIEW (Restored) */
+    .labelPreview { margin-top: 8px; text-align: left; }
+    .labelRow { border: 1px solid #eee; border-radius: 12px; padding: 12px; margin-top: 10px; background: #fff; position: relative; overflow: hidden; }
+    .labelRow.sendout::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 8px; background: #000; }
+    .labelMetaTop { display:flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+    .labelTag { display:inline-block; padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 800; background:#f2f2f2; }
+    .labelTag.so { background:#000; color:#fff; }
+    .labelTag.ih { background:#e9f7ee; color:#1f7a39; border:1px solid #bfe8cc; }
+    .barcodeLine { font-size: 16px; font-weight: 900; letter-spacing: 0.3px; }
+    .testsLine { margin-top: 6px; font-size: 13px; color:#111; line-height: 1.2; }
     
+    /* BUTTONS */
     .btn { display: block; width: 100%; padding: 18px; margin-top: 12px; border-radius: 12px; font-size: 18px; font-weight: 700; border: none; cursor: pointer; text-decoration: none; box-sizing: border-box; }
     .btn-print { background: #007bff; color: white; }
     .btn-success { background: #28a745; color: white; }
     .btn-warn { background: #ffc107; color: #111; }
     .btn-danger { background: #dc3545; color: white; }
     
+    .pill { display:inline-block; padding:4px 10px; border-radius:999px; background:#eee; font-size:12px; font-weight:700; margin-bottom:10px; }
     .debug { margin-top: 20px; font-size: 11px; color: #888; text-align: left; background: #eee; padding: 10px; border-radius: 8px; white-space: pre-wrap; }
   </style>
 </head>
 <body>
 
 <div class="card">
+  <div class="pill" id="platformPill">Detecting...</div>
+
   <div id="printView">
-    <div class="title">1. Print Labels</div>
+    <div class="title">1. Verify & Print</div>
     <div class="patient-box">
       <strong>Patient:</strong> <span id="name">—</span><br>
       <strong>DOB:</strong> <span id="dob">—</span>
     </div>
-    <div id="labelPreview"></div>
+    <div class="labelPreview" id="labelPreview">Loading labels...</div>
     <button id="printBtn" class="btn btn-print">🖨️ Print Labels</button>
   </div>
 
@@ -44,7 +57,7 @@
     <p>Labels printed. Verify and attach to tubes before confirming collection.</p>
     
     <button onclick="handleOutcome('SUCCESS')" class="btn btn-success">✅ Yes, Collection Complete</button>
-    <button onclick="handleOutcome('HANDWRITE')" class="btn btn-warn">✍️ Printer Failed (Hand-wrote)</button>
+    <button onclick="handleOutcome('HANDWRITE')" class="btn btn-warn">✍️ Printer Failed (Hand-write)</button>
     <button onclick="handleOutcome('REFUSED')" class="btn btn-danger">❌ Unable to Draw / Refused</button>
   </div>
 
@@ -53,67 +66,105 @@
 
 <script>
 /* ============================
-   CONFIG & UTILS
+   CONFIG
 ============================ */
-// Switch to "ARROWHEAD" for direct Android intent, or "SHORTCUT" for MobiPrint-via-Shortcut
-const ANDROID_MODE = "ARROWHEAD"; 
+const ANDROID_MODE = "ARROWHEAD"; // "ARROWHEAD" for direct intent, "SHORTCUT" for MobiPrint-via-Shortcut
 
 const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 const isAndroid = () => /Android/i.test(navigator.userAgent);
 const isWindows = () => /Win/.test(navigator.platform);
 
 let patientData = {};
+let finalZpl = "";
 
 /* ============================
-   WORKFLOW LOGIC
+   INITIALIZATION
 ============================ */
 function init() {
-    const params = new URLSearchParams(window.location.hash.substring(1));
+    const hash = window.location.hash.substring(1);
+    const params = new URLSearchParams(hash);
+    
+    document.getElementById("platformPill").innerText = isIOS() ? "iOS" : (isAndroid() ? "Android" : "Windows");
+
     patientData = {
-        name: params.get("name") || "",
-        dob: params.get("dob") || "",
-        items: params.get("items") || "",
-        label: params.get("label") || "",
-        tests: params.get("tests") || "",
-        st: params.get("st") || "",
+        name: decodeURIComponent(params.get("name") || ""),
+        dob: decodeURIComponent(params.get("dob") || ""),
+        items: decodeURIComponent(params.get("items") || "").split("|"),
+        label: decodeURIComponent(params.get("label") || "").split("|"),
+        tests: decodeURIComponent(params.get("tests") || "").split("|"),
+        st: decodeURIComponent(params.get("st") || "").split("|"),
         cb: params.get("cb") || "asana://"
     };
 
-    if(!patientData.name) return;
+    if(!patientData.name || !patientData.items[0]) {
+        document.getElementById("labelPreview").innerText = "Waiting for data...";
+        return;
+    }
 
     document.getElementById("name").innerText = patientData.name;
     document.getElementById("dob").innerText = patientData.dob;
-    
-    // Render simplified preview
-    const items = patientData.items.split("|");
-    let html = "";
-    items.forEach(it => {
-        if(!it) return;
-        const [bc, qty] = it.split("*");
-        html += `<div class="labelRow"><small>Tube:</small> <strong>${bc}</strong> (x${qty})</div>`;
-    });
-    document.getElementById("labelPreview").innerHTML = html;
 
-    // Set Print Action
+    renderLabels();
+
     document.getElementById("printBtn").onclick = () => {
         executePrint();
-        // Shift UI to Confirmation View
         document.getElementById("printView").style.display = "none";
         document.getElementById("confirmView").style.display = "block";
+        // Scrub PHI from URL for privacy
+        setTimeout(() => { history.replaceState(null, "", window.location.pathname); }, 500);
     };
 }
 
+function renderLabels() {
+    let uiHtml = "";
+    finalZpl = "";
+
+    patientData.items.forEach((item, i) => {
+        if (!item) return;
+        let [bc, qty] = item.split("*");
+        qty = parseInt(qty) || 1;
+        
+        const lbl = patientData.label[i] || "IH";
+        const tst = patientData.tests[i] || "";
+        const stype = patientData.st[i] || "";
+        const isSO = lbl.toUpperCase() === "SO";
+
+        // Build UI
+        uiHtml += `
+            <div class="labelRow ${isSO ? 'sendout' : ''}">
+                <div class="labelMetaTop">
+                    <span class="labelTag ${isSO ? 'so' : 'ih'}">${isSO ? 'SO' : 'IH'}</span>
+                    <span style="font-size:11px; font-weight:700; color:#666;">QTY: ${qty}</span>
+                </div>
+                <div class="barcodeLine">${bc}</div>
+                <div class="testsLine"><strong>${stype}</strong> - ${tst}</div>
+            </div>`;
+        
+        // Build ZPL
+        const border = isSO ? 15 : 0;
+        finalZpl += `^XA^MMT^MNM^PR6^MD30^FO0,10^GB385,${border},${border}^FS`;
+        finalZpl += `^FO20,25^A0N,32,32^FD${patientData.name.substring(0,25)}^FS`;
+        finalZpl += `^FO20,55^A0N,28,28^FD${patientData.dob}^FS`;
+        finalZpl += `^FO20,78^BY2,2,80^BCN,80,Y,N,N^FD${bc}^FS`;
+        finalZpl += `^FO12,180^A0N,20,20^FD${stype}^FS`;
+        finalZpl += `^FO12,200^A0N,20,20^FB350,2,0,L,0^FD${tst}^FS`;
+        finalZpl += `^PQ${qty},0,1,Y^XZ\r\n`;
+    });
+
+    document.getElementById("labelPreview").innerHTML = uiHtml;
+}
+
+/* ============================
+   ACTIONS
+============================ */
 function executePrint() {
-    const zpl = buildFullZpl();
-    
     if (isWindows()) {
-        printViaSerial(zpl);
+        printViaSerial(finalZpl);
     } else if (isAndroid()) {
         if (ANDROID_MODE === "ARROWHEAD") {
-            const b64 = btoa(zpl).replace(/=/g, "_");
+            const b64 = btoa(finalZpl.replace(/[^\x00-\x7F]/g, "")).replace(/=/g, "_");
             window.location.href = `intent://x-callback-url/zplcode?code=${b64}#Intent;scheme=arrowhead;package=com.mobiprintpro.retail.android;end`;
         } else {
-            // Android uses Shortcut-style if needed
             window.location.href = `shortcuts://run-shortcut?name=SMS-Print&text=${encodeURIComponent(window.location.hash)}`;
         }
     } else if (isIOS()) {
@@ -122,54 +173,19 @@ function executePrint() {
 }
 
 function handleOutcome(status) {
-    let finalUrl = patientData.cb;
-    
     switch(status) {
         case 'SUCCESS':
-            alert("Collection Logged. Completing Task...");
-            // Asana callbacks usually require specific URL structures to complete tasks
-            // This assumes the callback provided in 'cb' is the direct route
-            window.location.href = finalUrl;
+            window.location.href = patientData.cb;
             break;
-            
         case 'HANDWRITE':
-            alert("Logging as Handwritten...");
-            // Append a comment parameter if your middleware supports it
-            window.location.href = finalUrl + "?comment=Handwritten-No-Label";
+            // Logic to append a note to your Asana callback if your middleware supports it
+            window.location.href = patientData.cb + (patientData.cb.includes('?') ? '&' : '?') + "status=handwritten";
             break;
-            
         case 'REFUSED':
-            alert("Logging Refusal. Task will remain open.");
-            // We just return to Asana without the 'complete' trigger if possible
-            window.location.href = "asana://"; 
+            // Return to Asana without completing (just open the app)
+            window.location.href = "asana://";
             break;
     }
-}
-
-/* ============================
-   ZPL GENERATOR (Windows/Android)
-============================ */
-function buildFullZpl() {
-    const items = patientData.items.split("|");
-    const labels = patientData.label.split("|");
-    const tests = patientData.tests.split("|");
-    const st = patientData.st.split("|");
-    
-    let totalZpl = "";
-    items.forEach((item, i) => {
-        if(!item) return;
-        let [bc, qty] = item.split("*");
-        const isSO = (labels[i] || "").toUpperCase() === "SO" ? 15 : 0;
-        
-        totalZpl += `^XA^MMT^MNM^PR6^MD30^FO0,10^GB385,${isSO},${isSO}^FS`;
-        totalZpl += `^FO20,25^A0N,32,32^FD${patientData.name}^FS`;
-        totalZpl += `^FO20,55^A0N,28,28^FD${patientData.dob}^FS`;
-        totalZpl += `^FO20,78^BY2,2,80^BCN,80,Y,N,N^FD${bc}^FS`;
-        totalZpl += `^FO12,180^A0N,20,20^FD${st[i]||""}^FS`;
-        totalZpl += `^FO12,200^A0N,20,20^FB350,2,0,L,0^FD${tests[i]||""}^FS`;
-        totalZpl += `^PQ${qty},0,1,Y^XZ\r\n`;
-    });
-    return totalZpl;
 }
 
 async function printViaSerial(zpl) {
@@ -180,7 +196,7 @@ async function printViaSerial(zpl) {
         await writer.write(new TextEncoder().encode(zpl));
         writer.releaseLock();
         await port.close();
-    } catch (e) { document.getElementById("debug").innerText = e.message; }
+    } catch (e) { document.getElementById("debug").innerText = "Serial Error: " + e.message; }
 }
 
 window.onload = init;
