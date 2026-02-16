@@ -1,103 +1,242 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>SMS Print - System Version</title>
+  <title>SMS Print</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
-    /* UI STYLES - What you see on screen */
+    /* UI STYLES */
     body { font-family: -apple-system, sans-serif; text-align: center; padding: 28px 16px; background: #fff; }
     .card { max-width: 600px; margin: 0 auto; background: #fff; border-radius: 14px; padding: 18px; box-shadow: 0 4px 14px rgba(0,0,0,0.08); }
     .title { font-size: 20px; font-weight: 800; margin: 0 0 10px; }
     .sub { font-size: 16px; margin: 0 0 6px; text-align:left; }
-    .btn { display:inline-block; padding:18px 34px; margin-top:16px; background:#007bff; color:#fff; text-decoration:none; border-radius:12px; font-size:20px; font-weight:800; border:none; cursor:pointer; width: 100%; box-sizing: border-box; }
+    .sub strong { font-weight: 800; }
+    .btn { display:inline-block; padding:18px 34px; margin-top:16px; background:#28a745; color:#fff; text-decoration:none; border-radius:12px; font-size:20px; font-weight:800; border:none; cursor:pointer;}
+    .btnSecondary { display:inline-block; padding:14px 22px; margin-top:10px; background:#111; color:#fff; text-decoration:none; border-radius:12px; font-size:15px; font-weight:800; }
+    .debug { margin-top:16px; font-size:12px; color:#222; word-break:break-all; text-align:left; background:#f7f7f7; padding:14px; border-radius:12px; white-space:pre-wrap; border:1px solid #eee; }
+    .hint { margin-top:10px; font-size:12px; color:#666; text-align:left; line-height:1.35; }
     .pill { display:inline-block; padding:4px 10px; border-radius:999px; background:#eee; font-size:12px; font-weight:700; margin-bottom:10px; }
-    
-    .labelRow { border: 1px solid #eee; border-radius: 12px; padding: 12px; margin-top: 10px; text-align: left; position: relative; overflow: hidden; }
-    .labelRow.sendout::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 8px; background: #000; }
 
-    /* PRINT STYLES - What the printer sees */
+    /* UI LABEL PREVIEW */
+    .labelPreview { margin-top: 8px; text-align: left; }
+    .labelRow { border: 1px solid #eee; border-radius: 12px; padding: 12px 12px; margin-top: 10px; background: #fff; box-shadow: 0 2px 10px rgba(0,0,0,0.04); position: relative; overflow: hidden; }
+    .labelRow.sendout::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 8px; background: #000; }
+    .labelMetaTop { display:flex; justify-content: space-between; gap: 10px; align-items: baseline; margin-bottom: 6px; }
+    .labelTag { display:inline-block; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 800; background:#f2f2f2; }
+    .labelTag.so { background:#000; color:#fff; }
+    .labelTag.ih { background:#e9f7ee; color:#1f7a39; border:1px solid #bfe8cc; }
+    .barcodeLine { font-size: 16px; font-weight: 900; letter-spacing: 0.3px; }
+    .testsLine { margin-top: 6px; font-size: 13px; line-height: 1.25; color:#111; }
+    .sampleTypeLine { margin-top: 4px; font-size: 12px; color:#555; font-weight: 700; }
+    .mutedSmall { font-size: 12px; color:#666; font-weight: 700; }
+
+    /* WINDOWS SYSTEM PRINT STYLES - Hidden on screen, visible only to printer */
     @media print {
       body * { visibility: hidden; }
-      #printArea, #printArea * { visibility: visible; }
-      #printArea { position: absolute; left: 0; top: 0; width: 100%; }
-      .print-page { 
-        width: 3in; height: 1in; /* Adjust based on your label size */
-        page-break-after: always; 
-        padding: 5px;
+      #windowsPrintArea, #windowsPrintArea * { visibility: visible; }
+      #windowsPrintArea { position: absolute; left: 0; top: 0; width: 100%; margin: 0; padding: 0; }
+      
+      .sys-print-label {
+        width: 2.1in; /* Adjust based on your physical label width */
+        height: 1.1in; /* Adjust based on your physical label height */
+        page-break-after: always;
+        padding: 0.05in;
         box-sizing: border-box;
+        font-family: Arial, sans-serif;
+        position: relative;
+        overflow: hidden;
       }
-      .print-so-bar { height: 12px; background: black !important; -webkit-print-color-adjust: exact; margin-bottom: 4px; }
-      .print-name { font-size: 12pt; font-weight: bold; margin: 0; }
-      .print-barcode { font-size: 14pt; font-weight: bold; margin: 4px 0; font-family: monospace; }
+      .sys-print-label.sendout { border-top: 12px solid #000 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .p-name { font-size: 12pt; font-weight: bold; margin: 0 0 2px 0; }
+      .p-dob { font-size: 10pt; margin: 0 0 4px 0; }
+      .p-barcode { font-size: 14pt; font-weight: 900; margin: 0 0 2px 0; letter-spacing: 1px; }
+      .p-sample { font-size: 8pt; font-weight: bold; margin: 0;}
+      .p-tests { font-size: 8pt; line-height: 1.1; }
     }
   </style>
 </head>
 
 <body>
 <div class="card">
-  <div class="pill">Windows System Print</div>
-  <div class="title">✅ Verify & Print</div>
+  <div class="pill" id="platformPill">Detecting platform…</div>
+  <div class="title">✅ Verify Before Printing</div>
 
   <div class="sub"><strong>Name:</strong> <span id="patientName">—</span></div>
   <div class="sub"><strong>DOB:</strong> <span id="patientDob">—</span></div>
-  <div id="labelPreview"></div>
 
-  <button id="printBtn" class="btn" onclick="window.print()">Print Labels</button>
+  <div class="sub"><strong>Will print:</strong></div>
+  <div id="labelPreview" class="labelPreview">—</div>
+
+  <div class="sub"><strong>Total labels:</strong> <span id="totalLabels">—</span></div>
+
+  <a id="printBtn" class="btn" href="#">Print Labels</a><br>
+  <a id="backBtn" class="btnSecondary" href="#" style="display:none;">Back to Asana & Close Tab</a>
+
+  <div class="hint" id="hintText"></div>
+  <div id="debugText" class="debug">System ready.</div>
 </div>
 
-<div id="printArea"></div>
+<div id="windowsPrintArea"></div>
 
 <script>
+/* ============================
+   Helpers
+============================ */
 function getParam(key) {
   const hash = window.location.hash.substring(1);
   const params = new URLSearchParams(hash);
   return params.get(key) || "";
 }
 
+function decodePipeList(paramStr) {
+  const decoded = decodeURIComponent(paramStr || "").trim();
+  if (!decoded) return [];
+  return decoded.split("|").map(s => (s || "").trim());
+}
+
+function parseItems(itemsStr) {
+  const decoded = decodeURIComponent(itemsStr || "").trim();
+  if (!decoded) return [];
+  return decoded.split("|").map(part => {
+    let [barcode, qty] = part.split("*");
+    barcode = (barcode || "").trim();
+    qty = (qty || "1").trim();
+    if (!barcode) return null;
+    return { barcode, qty: String(parseInt(qty,10) || 1) };
+  }).filter(Boolean);
+}
+
+function escapeHtml(s) {
+  return String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+}
+
+/* ============================
+   Platform Detection
+============================ */
+function isIOS() { return (/iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)); }
+function isAndroid() { return /Android/i.test(navigator.userAgent); }
+function isWindows() { return /Win/i.test(navigator.platform) || /Mac/.test(navigator.platform); } // Added Mac as desktop fallback
+
+/* ============================
+   Android/iOS ZPL Builders (Preserved exactly)
+============================ */
+function buildSingleLabelZpl(name, dob, barcode, qty, labelType, testsText, sampleType) {
+  qty = parseInt(qty || "1", 10);
+  if (!qty || qty < 1) qty = 1;
+  const isSO = String(labelType || "").toUpperCase().trim() === "SO";
+  const Border = isSO ? 15 : 0;
+  return `^XA^MMT^MNM^PR6^MD30^FO0,10^GB385,${Border},${Border}^FS^FO20,25^A0N,32,32^FD${name.trim()}^FS^FO20,55^A0N,28,28^FD${dob.trim()}^FS^FO20,78^BY2,2,80^BCN,80,Y,N,N^FD${barcode.trim()}^FS^FO12,180^A0N,20,20^FD${sampleType.trim()}^FS^FO12,200^A0N,20,20^FB350,2,0,L,0^FD${testsText.trim()}^FS^PQ${qty},0,1,Y^XZ\r\n`;
+}
+
+function sanitizeZpl(zpl) {
+  return zpl.replace(/^\uFEFF/, "").replace(/\u00A0/g, " ").replace(/[^\x00-\x7F]/g, "").trim();
+}
+
+function mobiprintBase64(zpl) {
+  return btoa(zpl).replace(/=/g, "_");
+}
+
+/* ============================
+   Main Application
+============================ */
 function init() {
-  const name = decodeURIComponent(getParam("name") || "Patient Name");
-  const dob = decodeURIComponent(getParam("dob") || "DOB");
-  const itemsStr = decodeURIComponent(getParam("items") || "");
-  const labels = decodeURIComponent(getParam("label")).split("|");
-  const tests = decodeURIComponent(getParam("tests")).split("|");
-  const st = decodeURIComponent(getParam("st")).split("|");
+  const platform = isIOS() ? "iOS" : (isAndroid() ? "Android" : "Desktop/Windows");
+  document.getElementById("platformPill").innerText = platform;
+
+  // Read URL Data
+  const name = decodeURIComponent(getParam("name"));
+  const dob = decodeURIComponent(getParam("dob"));
+  const items = parseItems(getParam("items"));
+  const labelsList = decodePipeList(getParam("label"));
+  const testsList = decodePipeList(getParam("tests"));
+  const stList = decodePipeList(getParam("st"));
+  const cb = getParam("cb") || "asana://";
+
+  if (!name || !items.length) {
+    document.getElementById("debugText").innerText = "❌ Missing parameters in URL.";
+    return;
+  }
 
   document.getElementById("patientName").innerText = name;
   document.getElementById("patientDob").innerText = dob;
 
-  const itemParts = itemsStr.split("|");
-  const printArea = document.getElementById("printArea");
-  let previewHtml = "";
+  const printArea = document.getElementById("windowsPrintArea");
+  const btn = document.getElementById("printBtn");
 
-  itemParts.forEach((part, i) => {
-    let [bc, qty] = part.split("*");
-    qty = parseInt(qty) || 1;
-    const isSO = (labels[i] || "").toUpperCase() === "SO";
+  let uiHtml = "";
+  let fullZpl = "";
+  let totalQty = 0;
 
-    previewHtml += `<div class="labelRow ${isSO ? 'sendout' : ''}">
-      <div style="font-weight:900;">${bc} x${qty}</div>
-      <div style="font-size:12px;">${st[i] || ''} - ${tests[i] || ''}</div>
-    </div>`;
+  // Process each label item
+  items.forEach((it, i) => {
+    const isSO = (labelsList[i] || "").toUpperCase() === "SO";
+    const qty = parseInt(it.qty) || 1;
+    totalQty += qty;
 
+    // 1. Build the Screen UI Preview
+    uiHtml += `
+      <div class="labelRow ${isSO ? 'sendout' : ''}">
+        <div class="labelMetaTop">
+          <span class="labelTag ${isSO ? 'so' : 'ih'}">${isSO ? 'SO' : 'IH'}</span>
+          <span class="mutedSmall">Label ${i+1}</span>
+        </div>
+        <div class="barcodeLine">${escapeHtml(it.barcode)} <span class="mutedSmall">x${qty}</span></div>
+        <div class="testsLine">${escapeHtml(testsList[i] || '')}</div>
+        <div class="sampleTypeLine">${escapeHtml(stList[i] || '')}</div>
+      </div>
+    `;
+
+    // 2. Build Mobile ZPL Data (Android/iOS)
+    fullZpl += buildSingleLabelZpl(name, dob, it.barcode, it.qty, labelsList[i], testsList[i], stList[i]);
+
+    // 3. Build Windows System Print Pages
     for(let q=0; q < qty; q++) {
       const page = document.createElement("div");
-      page.className = "print-page";
+      page.className = "sys-print-label " + (isSO ? "sendout" : "");
       page.innerHTML = `
-        ${isSO ? '<div class="print-so-bar"></div>' : ''}
-        <div class="print-name">${name}</div>
-        <div>DOB: ${dob}</div>
-        <div class="print-barcode">${bc}</div>
-        <div style="font-size:8pt;">${st[i] || ''}<br>${tests[i] || ''}</div>
+        <div class="p-name">${escapeHtml(name)}</div>
+        <div class="p-dob">${escapeHtml(dob)}</div>
+        <div class="p-barcode">${escapeHtml(it.barcode)}</div>
+        <div class="p-sample">${escapeHtml(stList[i] || '')}</div>
+        <div class="p-tests">${escapeHtml(testsList[i] || '')}</div>
       `;
       printArea.appendChild(page);
     }
   });
 
-  document.getElementById("labelPreview").innerHTML = previewHtml;
+  document.getElementById("labelPreview").innerHTML = uiHtml;
+  document.getElementById("totalLabels").innerText = totalQty;
+
+  // ==========================================
+  // BUTTON BEHAVIOR BY PLATFORM
+  // ==========================================
+  if (isAndroid()) {
+    const cleanZpl = sanitizeZpl(fullZpl) + "\r\n";
+    const codeB64 = mobiprintBase64(cleanZpl);
+    btn.href = "intent://x-callback-url/zplcode?code=" + encodeURIComponent(codeB64) + "&x-success=" + encodeURIComponent(cb) + "#Intent;scheme=arrowhead;package=com.mobiprintpro.retail.android;end";
+    document.getElementById("backBtn").style.display = "inline-block";
+    document.getElementById("hintText").innerText = "Android: Prints using MobiPrint ZPL.";
+    
+    btn.onclick = () => {
+      setTimeout(() => { window.location.href = "intent://#Intent;scheme=asana;package=com.asana.app;end"; }, 3200);
+    };
+  } 
+  else if (isIOS()) {
+    btn.href = "shortcuts://run-shortcut?name=SMS%20Print&input=text&text=" + encodeURIComponent(window.location.hash.substring(1));
+    document.getElementById("hintText").innerText = "iOS: Runs the iOS Shortcut.";
+  } 
+  else {
+    // WINDOWS SYSTEM PRINT
+    btn.href = "#";
+    btn.onclick = function(e) {
+      e.preventDefault();
+      window.print(); // Opens standard Windows Print window
+    };
+    document.getElementById("hintText").innerText = "Windows: Uses Browser System Print. Ensure Margins are set to 'None'.";
+  }
 }
 
-// Run immediately on load
 window.onload = init;
+window.onhashchange = init;
 </script>
 </body>
 </html>
