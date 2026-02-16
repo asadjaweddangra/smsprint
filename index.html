@@ -166,7 +166,7 @@ function executePrint() {
             const iosLink = `arrowhead://x-callback-url/zplcode?code=${encodeURIComponent(b64)}&x-success=${encodeURIComponent(returnUrl)}&x-source=Browser`;
             window.location.href = iosLink;
         } else {
-            window.location.href = "shortcuts://run-shortcut?name=SMS-Print&input=text&text=" + encodeURIComponent(window.location.hash.substring(1));
+            window.location.href = "shortcuts://run-shortcut?name=SMSPrint&input=text&text=" + encodeURIComponent(window.location.hash.substring(1));
         }
     }
 }
@@ -203,4 +203,5 @@ window.onload = init;
 </script>
 </body>
 </html>
+
 
