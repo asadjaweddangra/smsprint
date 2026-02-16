@@ -1,21 +1,19 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Specimen Collection Workflow</title>
+  <title>Specimen Collection Pro</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
-    /* UI STYLES */
     body { font-family: -apple-system, sans-serif; text-align: center; padding: 20px 16px; background: #f4f7f6; color: #111; }
     .card { max-width: 500px; margin: 0 auto; background: #fff; border-radius: 16px; padding: 24px; box-shadow: 0 8px 30px rgba(0,0,0,0.1); }
     
-    /* State Visibility */
     #printView { display: block; }
     #confirmView { display: none; }
 
     .title { font-size: 22px; font-weight: 800; margin-bottom: 15px; }
     .patient-box { background: #f8f9fa; padding: 15px; border-radius: 12px; text-align: left; margin-bottom: 20px; border-left: 5px solid #007bff; }
     
-    /* RICH LABEL PREVIEW (Restored) */
+    /* RICH LABEL PREVIEW */
     .labelPreview { margin-top: 8px; text-align: left; }
     .labelRow { border: 1px solid #eee; border-radius: 12px; padding: 12px; margin-top: 10px; background: #fff; position: relative; overflow: hidden; }
     .labelRow.sendout::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 8px; background: #000; }
@@ -26,21 +24,21 @@
     .barcodeLine { font-size: 16px; font-weight: 900; letter-spacing: 0.3px; }
     .testsLine { margin-top: 6px; font-size: 13px; color:#111; line-height: 1.2; }
     
-    /* BUTTONS */
+    /* WORKFLOW BUTTONS */
     .btn { display: block; width: 100%; padding: 18px; margin-top: 12px; border-radius: 12px; font-size: 18px; font-weight: 700; border: none; cursor: pointer; text-decoration: none; box-sizing: border-box; }
     .btn-print { background: #007bff; color: white; }
     .btn-success { background: #28a745; color: white; }
     .btn-warn { background: #ffc107; color: #111; }
     .btn-danger { background: #dc3545; color: white; }
     
-    .pill { display:inline-block; padding:4px 10px; border-radius:999px; background:#eee; font-size:12px; font-weight:700; margin-bottom:10px; }
+    .pill { display:inline-block; padding:4px 10px; border-radius:999px; background:#eee; font-size:10px; font-weight:700; margin-bottom:10px; text-transform: uppercase; }
     .debug { margin-top: 20px; font-size: 11px; color: #888; text-align: left; background: #eee; padding: 10px; border-radius: 8px; white-space: pre-wrap; }
   </style>
 </head>
 <body>
 
 <div class="card">
-  <div class="pill" id="platformPill">Detecting...</div>
+  <div id="platformPill" class="pill">Detecting...</div>
 
   <div id="printView">
     <div class="title">1. Verify & Print</div>
@@ -48,13 +46,13 @@
       <strong>Patient:</strong> <span id="name">—</span><br>
       <strong>DOB:</strong> <span id="dob">—</span>
     </div>
-    <div class="labelPreview" id="labelPreview">Loading labels...</div>
+    <div class="labelPreview" id="labelPreview">Preparing labels...</div>
     <button id="printBtn" class="btn btn-print">🖨️ Print Labels</button>
   </div>
 
   <div id="confirmView">
     <div class="title">2. Collection Status</div>
-    <p>Labels printed. Verify and attach to tubes before confirming collection.</p>
+    <p style="font-size: 14px; color: #555;">Verify label against patient ID, attach to tube, then select outcome:</p>
     
     <button onclick="handleOutcome('SUCCESS')" class="btn btn-success">✅ Yes, Collection Complete</button>
     <button onclick="handleOutcome('HANDWRITE')" class="btn btn-warn">✍️ Printer Failed (Hand-write)</button>
@@ -65,11 +63,16 @@
 </div>
 
 <script>
-/* ============================
-   CONFIG
-============================ */
-const ANDROID_MODE = "ARROWHEAD"; // "ARROWHEAD" for direct intent, "SHORTCUT" for MobiPrint-via-Shortcut
+/* ============================================================
+   CONFIGURATION: Switch modes here
+   Options: "ARROWHEAD" (Direct App) or "SHORTCUT" (iOS Shortcuts)
+   ============================================================ */
+const ANDROID_MODE = "ARROWHEAD"; 
+const IOS_MODE     = "ARROWHEAD"; 
 
+/* ============================
+   DETECTION & GLOBALS
+============================ */
 const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 const isAndroid = () => /Android/i.test(navigator.userAgent);
 const isWindows = () => /Win/.test(navigator.platform);
@@ -84,7 +87,9 @@ function init() {
     const hash = window.location.hash.substring(1);
     const params = new URLSearchParams(hash);
     
-    document.getElementById("platformPill").innerText = isIOS() ? "iOS" : (isAndroid() ? "Android" : "Windows");
+    const os = isIOS() ? "iOS" : (isAndroid() ? "Android" : (isWindows() ? "Windows" : "Unknown"));
+    const mode = isIOS() ? IOS_MODE : (isAndroid() ? ANDROID_MODE : "Serial");
+    document.getElementById("platformPill").innerText = `${os} Mode: ${mode}`;
 
     patientData = {
         name: decodeURIComponent(params.get("name") || ""),
@@ -97,7 +102,7 @@ function init() {
     };
 
     if(!patientData.name || !patientData.items[0]) {
-        document.getElementById("labelPreview").innerText = "Waiting for data...";
+        document.getElementById("labelPreview").innerText = "Error: Missing Patient Data";
         return;
     }
 
@@ -108,9 +113,10 @@ function init() {
 
     document.getElementById("printBtn").onclick = () => {
         executePrint();
+        // Transition to Verification State
         document.getElementById("printView").style.display = "none";
         document.getElementById("confirmView").style.display = "block";
-        // Scrub PHI from URL for privacy
+        // Privacy: Scrub URL after print
         setTimeout(() => { history.replaceState(null, "", window.location.pathname); }, 500);
     };
 }
@@ -124,12 +130,11 @@ function renderLabels() {
         let [bc, qty] = item.split("*");
         qty = parseInt(qty) || 1;
         
-        const lbl = patientData.label[i] || "IH";
+        const lblType = (patientData.label[i] || "IH").toUpperCase();
         const tst = patientData.tests[i] || "";
         const stype = patientData.st[i] || "";
-        const isSO = lbl.toUpperCase() === "SO";
+        const isSO = lblType === "SO";
 
-        // Build UI
         uiHtml += `
             <div class="labelRow ${isSO ? 'sendout' : ''}">
                 <div class="labelMetaTop">
@@ -140,14 +145,14 @@ function renderLabels() {
                 <div class="testsLine"><strong>${stype}</strong> - ${tst}</div>
             </div>`;
         
-        // Build ZPL
+        // ZPL Generation
         const border = isSO ? 15 : 0;
         finalZpl += `^XA^MMT^MNM^PR6^MD30^FO0,10^GB385,${border},${border}^FS`;
         finalZpl += `^FO20,25^A0N,32,32^FD${patientData.name.substring(0,25)}^FS`;
         finalZpl += `^FO20,55^A0N,28,28^FD${patientData.dob}^FS`;
         finalZpl += `^FO20,78^BY2,2,80^BCN,80,Y,N,N^FD${bc}^FS`;
-        finalZpl += `^FO12,180^A0N,20,20^FD${stype}^FS`;
-        finalZpl += `^FO12,200^A0N,20,20^FB350,2,0,L,0^FD${tst}^FS`;
+        finalZpl += `^FO12,180^A0N,20,20^FD${stype.substring(0,30)}^FS`;
+        finalZpl += `^FO12,200^A0N,20,20^FB350,2,0,L,0^FD${tst.substring(0,60)}^FS`;
         finalZpl += `^PQ${qty},0,1,Y^XZ\r\n`;
     });
 
@@ -155,39 +160,57 @@ function renderLabels() {
 }
 
 /* ============================
-   ACTIONS
+   EXECUTION & PRINTING
 ============================ */
 function executePrint() {
+    const cleanZpl = finalZpl.replace(/[^\x00-\x7F]/g, ""); // Remove non-ASCII
+    const b64 = btoa(cleanZpl).replace(/=/g, "_");
+
     if (isWindows()) {
         printViaSerial(finalZpl);
-    } else if (isAndroid()) {
+    } 
+    else if (isAndroid()) {
         if (ANDROID_MODE === "ARROWHEAD") {
-            const b64 = btoa(finalZpl.replace(/[^\x00-\x7F]/g, "")).replace(/=/g, "_");
             window.location.href = `intent://x-callback-url/zplcode?code=${b64}#Intent;scheme=arrowhead;package=com.mobiprintpro.retail.android;end`;
         } else {
-            window.location.href = `shortcuts://run-shortcut?name=SMS-Print&text=${encodeURIComponent(window.location.hash)}`;
+            // Android can trigger Shortcuts if an app like 'Tasker' or 'Shortcuts' is used, 
+            // but usually this goes to a Shortcut link
+            window.location.href = "shortcuts://run-shortcut?name=SMS-Print&text=" + encodeURIComponent(window.location.hash.substring(1));
         }
-    } else if (isIOS()) {
-        window.location.href = `shortcuts://run-shortcut?name=SMS-Print&text=${encodeURIComponent(window.location.hash)}`;
+    } 
+    else if (isIOS()) {
+        if (IOS_MODE === "ARROWHEAD") {
+            window.location.href = `arrowhead://x-callback-url/zplcode?code=${encodeURIComponent(b64)}`;
+        } else {
+            window.location.href = "shortcuts://run-shortcut?name=SMS-Print&input=text&text=" + encodeURIComponent(window.location.hash.substring(1));
+        }
     }
 }
 
+/* ============================
+   OUTCOME HANDLERS
+============================ */
 function handleOutcome(status) {
+    const cb = patientData.cb;
     switch(status) {
         case 'SUCCESS':
-            window.location.href = patientData.cb;
+            window.location.href = cb;
             break;
         case 'HANDWRITE':
-            // Logic to append a note to your Asana callback if your middleware supports it
-            window.location.href = patientData.cb + (patientData.cb.includes('?') ? '&' : '?') + "status=handwritten";
+            // Appends status to callback for middleware logging
+            const separator = cb.includes('?') ? '&' : '?';
+            window.location.href = `${cb}${separator}status=handwritten`;
             break;
         case 'REFUSED':
-            // Return to Asana without completing (just open the app)
+            // Return to Asana without completing task
             window.location.href = "asana://";
             break;
     }
 }
 
+/* ============================
+   WINDOWS SERIAL ENGINE
+============================ */
 async function printViaSerial(zpl) {
     try {
         const port = await navigator.serial.requestPort();
@@ -196,7 +219,10 @@ async function printViaSerial(zpl) {
         await writer.write(new TextEncoder().encode(zpl));
         writer.releaseLock();
         await port.close();
-    } catch (e) { document.getElementById("debug").innerText = "Serial Error: " + e.message; }
+        document.getElementById("debug").innerText = "Print sent to Serial Port.";
+    } catch (e) {
+        document.getElementById("debug").innerText = "Serial Error: " + e.message;
+    }
 }
 
 window.onload = init;
