@@ -4,71 +4,104 @@
   <title>SMS Print - System Version</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
-    /* UI STYLES */
-    body { font-family: -apple-system, sans-serif; text-align: center; padding: 20px; background: #fff; }
-    .card { max-width: 500px; margin: 0 auto; border-radius: 14px; padding: 18px; box-shadow: 0 4px 14px rgba(0,0,0,0.1); }
-    .btn { display:inline-block; padding:18px 34px; margin-top:16px; background:#007bff; color:#fff; text-decoration:none; border-radius:12px; font-size:20px; font-weight:800; border:none; cursor:pointer; width: 100%; }
+    /* UI STYLES - What you see on screen */
+    body { font-family: -apple-system, sans-serif; text-align: center; padding: 28px 16px; background: #fff; }
+    .card { max-width: 600px; margin: 0 auto; background: #fff; border-radius: 14px; padding: 18px; box-shadow: 0 4px 14px rgba(0,0,0,0.08); }
+    .title { font-size: 20px; font-weight: 800; margin: 0 0 10px; }
+    .sub { font-size: 16px; margin: 0 0 6px; text-align:left; }
+    .btn { display:inline-block; padding:18px 34px; margin-top:16px; background:#007bff; color:#fff; text-decoration:none; border-radius:12px; font-size:20px; font-weight:800; border:none; cursor:pointer; width: 100%; box-sizing: border-box; }
+    .pill { display:inline-block; padding:4px 10px; border-radius:999px; background:#eee; font-size:12px; font-weight:700; margin-bottom:10px; }
     
-    /* PREVIEW HIDDEN DURING PRINT */
-    .labelRow { border: 1px solid #eee; padding: 12px; margin-top: 10px; text-align: left; border-radius: 8px; }
+    /* Label Row UI */
+    .labelRow { border: 1px solid #eee; border-radius: 12px; padding: 12px; margin-top: 10px; text-align: left; position: relative; overflow: hidden; }
+    .labelRow.sendout::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 8px; background: #000; }
 
-    /* PRINT LAYOUT (Matches Zebra 2x1 or 3x1 labels) */
+    /* PRINT STYLES - Only applied when printing */
     @media print {
       body * { visibility: hidden; }
       #printArea, #printArea * { visibility: visible; }
       #printArea { position: absolute; left: 0; top: 0; width: 100%; }
       .print-page { 
-        width: 3in; height: 1in; /* ADJUST TO YOUR LABEL SIZE */
+        width: 3in; height: 1in; /* ADJUST THIS TO MATCH YOUR PHYSICAL LABELS */
         page-break-after: always; 
         padding: 5px;
         box-sizing: border-box;
+        text-align: left;
       }
-      .print-name { font-size: 14pt; font-weight: bold; }
-      .print-barcode { font-size: 16pt; font-family: 'Courier New', monospace; font-weight: bold; }
+      .print-so-bar { height: 12px; background: black !important; -webkit-print-color-adjust: exact; margin-bottom: 4px; }
+      .print-name { font-size: 12pt; font-weight: bold; margin: 0; }
+      .print-dob { font-size: 10pt; margin: 0; }
+      .print-barcode { font-size: 14pt; font-weight: bold; margin: 4px 0; font-family: monospace; }
     }
   </style>
 </head>
+
 <body>
 <div class="card">
-  <h2>✅ Verify & Print</h2>
-  <div id="patientInfo" style="text-align:left; margin-bottom:15px;">
-    <strong>Name:</strong> <span id="pName"></span><br>
-    <strong>DOB:</strong> <span id="pDob"></span>
-  </div>
-  <div id="uiPreview"></div>
-  <button class="btn" onclick="window.print()">Open Windows Print Dialog</button>
+  <div class="pill">Windows System Print</div>
+  <div class="title">✅ Verify & Print</div>
+
+  <div class="sub"><strong>Name:</strong> <span id="patientName">—</span></div>
+  <div class="sub"><strong>DOB:</strong> <span id="patientDob">—</span></div>
+  <div id="labelPreview"></div>
+
+  <button id="printBtn" class="btn" onclick="window.print()">Print Labels</button>
 </div>
 
 <div id="printArea"></div>
 
 <script>
-  function init() {
-    const params = new URLSearchParams(window.location.hash.substring(1));
-    const name = decodeURIComponent(params.get("name") || "Test Patient");
-    const dob = decodeURIComponent(params.get("dob") || "01/01/1990");
-    const items = (params.get("items") || "").split("|");
+function getParam(key) {
+  const hash = window.location.hash.substring(1);
+  const params = new URLSearchParams(hash);
+  return params.get(key) || "";
+}
 
-    document.getElementById("pName").innerText = name;
-    document.getElementById("pDob").innerText = dob;
+function init() {
+  const name = decodeURIComponent(getParam("name") || "Charles Boyd");
+  const dob = decodeURIComponent(getParam("dob") || "06/19/1939");
+  const itemsStr = decodeURIComponent(getParam("items") || "60004624S1*1");
+  const labels = decodeURIComponent(getParam("label")).split("|");
+  const tests = decodeURIComponent(getParam("tests")).split("|");
+  const st = decodeURIComponent(getParam("st")).split("|");
 
-    const printArea = document.getElementById("printArea");
-    items.forEach(item => {
-      let [bc, qty] = item.split("*");
-      qty = parseInt(qty) || 1;
+  document.getElementById("patientName").innerText = name;
+  document.getElementById("patientDob").innerText = dob;
 
-      for(let i=0; i<qty; i++) {
-        const page = document.createElement("div");
-        page.className = "print-page";
-        page.innerHTML = `
-          <div class="print-name">${name}</div>
-          <div>DOB: ${dob}</div>
-          <div class="print-barcode">${bc}</div>
-        `;
-        printArea.appendChild(page);
-      }
-    });
-  }
-  window.onload = init;
+  const itemParts = itemsStr.split("|");
+  const printArea = document.getElementById("printArea");
+  let previewHtml = "";
+
+  itemParts.forEach((part, i) => {
+    let [bc, qty] = part.split("*");
+    qty = parseInt(qty) || 1;
+    const isSO = (labels[i] || "").toUpperCase() === "SO";
+
+    // Build the UI Preview
+    previewHtml += `<div class="labelRow ${isSO ? 'sendout' : ''}">
+      <div style="font-weight:900;">${bc} x${qty}</div>
+      <div style="font-size:12px;">${st[i] || ''} - ${tests[i] || ''}</div>
+    </div>`;
+
+    // Build the actual pages for System Print
+    for(let q=0; q < qty; q++) {
+      const page = document.createElement("div");
+      page.className = "print-page";
+      page.innerHTML = `
+        ${isSO ? '<div class="print-so-bar"></div>' : ''}
+        <div class="print-name">${name}</div>
+        <div class="print-dob">DOB: ${dob}</div>
+        <div class="print-barcode">${bc}</div>
+        <div class="print-tests">${st[i] || ''}<br>${tests[i] || ''}</div>
+      `;
+      printArea.appendChild(page);
+    }
+  });
+
+  document.getElementById("labelPreview").innerHTML = previewHtml;
+}
+
+window.onload = init;
 </script>
 </body>
 </html>
