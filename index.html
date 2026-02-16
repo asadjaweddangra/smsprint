@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>SMS Specimen Checklist Pro</title>
+  <title>SMS Specimen Portal</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     body { font-family: -apple-system, sans-serif; text-align: center; padding: 20px 16px; background: #f4f7f6; color: #111; }
@@ -11,10 +11,13 @@
     .patient-box { background: #f8f9fa; padding: 15px; border-radius: 12px; text-align: left; margin-bottom: 20px; border-left: 5px solid #007bff; }
     
     /* SYNCED CHECKLIST STYLES */
-    .labelRow { border: 1px solid #eee; border-radius: 12px; padding: 12px; margin-top: 10px; background: #fff; position: relative; overflow: hidden; display: flex; align-items: center; gap: 12px; cursor: pointer; text-align: left; }
+    .labelRow { border: 1px solid #eee; border-radius: 12px; padding: 12px; margin-top: 10px; background: #fff; position: relative; overflow: hidden; display: flex; align-items: center; gap: 12px; cursor: pointer; text-align: left; transition: background 0.1s; }
+    .labelRow:hover { background: #fafafa; }
     .labelRow.sendout::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 8px; background: #000; }
-    .cb-input { width: 26px; height: 26px; accent-color: #28a745; flex-shrink: 0; }
-    .labelContent { flex: 1; }
+    
+    .cb-input { width: 26px; height: 26px; accent-color: #28a745; flex-shrink: 0; cursor: pointer; pointer-events: auto; }
+    .labelContent { flex: 1; pointer-events: none; } /* Allows the row click to work better */
+    
     .labelTag { display:inline-block; padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 800; background:#f2f2f2; margin-bottom: 4px;}
     .labelTag.so { background:#000; color:#fff; }
     .labelTag.ih { background:#e9f7ee; color:#1f7a39; border:1px solid #bfe8cc; }
@@ -26,8 +29,9 @@
     .btn-success { background: #28a745; color: white; }
     .btn-warn { background: #ffc107; color: #111; }
     .btn-danger { background: #dc3545; color: white; }
+    
     .pill { display:inline-block; padding:4px 10px; border-radius:999px; background:#eee; font-size:10px; font-weight:700; margin-bottom:10px; text-transform: uppercase; }
-    .debug { margin-top: 20px; font-size: 11px; color: #888; text-align: left; background: #eee; padding: 10px; border-radius: 8px; white-space: pre-wrap; }
+    .debug { margin-top: 20px; font-size: 11px; color: #888; text-align: left; background: #eee; padding: 10px; border-radius: 8px; white-space: pre-wrap; font-family: monospace; }
   </style>
 </head>
 <body>
@@ -65,7 +69,7 @@
    CONFIG
    ============================================================ */
 const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzFK7SvlJZhAi33E2knw3TNkppdpQsk0PO4TOewm-N9ZIpGZx4GmZm8EwCVFK7dikrMzg/exec"; 
-const IOS_MODE = "SHORTCUT"; 
+const IOS_MODE = "SHORTCUT"; // Options: "ARROWHEAD" or "SHORTCUT"
 const ANDROID_MODE = "ARROWHEAD";
 
 const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
@@ -74,15 +78,20 @@ const isAndroid = () => /Android/i.test(navigator.userAgent);
 let patientData = {};
 let finalZpl = "";
 
+/* Logic: Ignore index 0, Ignore last 2. Prefix SM2(FirstDigit)- */
 function convertBarcodeToOrderCode(barcode) {
     if (!barcode || barcode.length < 5) return barcode;
-    return `SM2${barcode.charAt(0)}-${barcode.substring(1, barcode.length - 2)}`;
+    const firstDigit = barcode.charAt(0);
+    const middlePart = barcode.substring(1, barcode.length - 2);
+    return `SM2${firstDigit}-${middlePart}`;
 }
 
 function init() {
     const params = new URLSearchParams(window.location.hash.substring(1));
     const rawItems = decodeURIComponent(params.get("items") || "");
     const firstBarcode = rawItems.split("|")[0].split("*")[0];
+
+    document.getElementById("platformPill").innerText = isIOS() ? `iOS (${IOS_MODE})` : (isAndroid() ? "Android" : "Windows");
 
     patientData = {
         name: decodeURIComponent(params.get("name") || ""),
@@ -99,7 +108,6 @@ function init() {
     document.getElementById("name").innerText = patientData.name;
     document.getElementById("dob").innerText = patientData.dob;
     
-    // Draw the list into both sections
     renderLists();
 
     document.getElementById("printBtn").onclick = () => {
@@ -110,7 +118,6 @@ function init() {
     };
 }
 
-// Logic to render the list with linked checkboxes
 function renderLists() {
     let uiHtml = "";
     finalZpl = "";
@@ -122,30 +129,34 @@ function renderLists() {
         const stype = patientData.st[i] || "";
         const isSO = lblType === "SO";
 
-        // Generate the Row Template
+        // row helper
         const row = (suffix) => `
-            <label class="labelRow ${isSO ? 'sendout' : ''}">
-                <input type="checkbox" class="cb-input tube-check" data-index="${i}" id="check-${suffix}-${i}" checked onchange="syncChecks(${i}, '${suffix}')"> 
+            <div class="labelRow ${isSO ? 'sendout' : ''}" onclick="toggleCheck(${i}, '${suffix}')">
+                <input type="checkbox" class="cb-input" id="check-${suffix}-${i}" checked onclick="event.stopPropagation(); syncChecks(${i}, '${suffix}')"> 
                 <div class="labelContent">
                     <span class="labelTag ${isSO ? 'so' : 'ih'}">${lblType}</span>
                     <div class="barcodeLine">${bc}</div>
                     <div class="testsLine"><strong>${stype}</strong><br>${tst}</div>
                 </div>
-            </label>`;
+            </div>`;
         
         uiHtml += row('v1');
         
-        // Build ZPL
         const border = isSO ? 15 : 0;
         finalZpl += `^XA^MMT^MNM^PR6^MD30^FO0,10^GB385,${border},${border}^FS^FO20,25^A0N,32,32^FD${patientData.name.substring(0,25)}^FS^FO20,55^A0N,28,28^FD${patientData.dob}^FS^FO20,78^BY2,2,80^BCN,80,Y,N,N^FD${bc}^FS^FO12,180^A0N,20,20^FD${stype.substring(0,30)}^FS^FO12,200^A0N,20,20^FB350,2,0,L,0^FD${tst.substring(0,60)}^FS^PQ${qty},0,1,Y^XZ\r\n`;
     });
 
     document.getElementById("labelPreview1").innerHTML = uiHtml;
-    // Mirror the HTML to the second view
-    document.getElementById("labelPreview2").innerHTML = uiHtml.replace(/check-v1-/g, 'check-v2-').replace(/syncChecks\((.*), 'v1'\)/g, "syncChecks($1, 'v2')");
+    // Map same HTML to View 2 but change IDs and toggle function source
+    document.getElementById("labelPreview2").innerHTML = uiHtml.replace(/check-v1-/g, 'check-v2-').replace(/toggleCheck\((.*), 'v1'\)/g, "toggleCheck($1, 'v2')").replace(/syncChecks\((.*), 'v1'\)/g, "syncChecks($1, 'v2')");
 }
 
-// Keep Screen 1 and Screen 2 checkboxes in sync
+function toggleCheck(index, source) {
+    const cb = document.getElementById(`check-${source}-${index}`);
+    cb.checked = !cb.checked;
+    syncChecks(index, source);
+}
+
 function syncChecks(index, source) {
     const other = source === 'v1' ? 'v2' : 'v1';
     const val = document.getElementById(`check-${source}-${index}`).checked;
@@ -154,20 +165,17 @@ function syncChecks(index, source) {
 
 async function handleOutcome(status) {
     const debugDiv = document.getElementById("debug");
-    
-    // Calculate final collected/missed based on CURRENT state of checkboxes
     let collected = [], missed = [];
     patientData.items.forEach((item, i) => {
         if (!item) return;
         const stype = patientData.st[i] || "Sample";
-        if(document.getElementById(`check-v2-${i}`).checked) {
-            collected.push(stype);
-        } else {
-            missed.push(stype);
-        }
+        if(document.getElementById(`check-v2-${i}`).checked) collected.push(stype);
+        else missed.push(stype);
     });
 
-    debugDiv.innerText = "Syncing with Asana...";
+    // DISPLAY ORDER CODE IN DEBUG
+    debugDiv.innerText = `🔄 Syncing Order: ${patientData.order_code}\nOutcome: ${status}...`;
+
     try {
         await fetch(GOOGLE_SCRIPT_URL, {
             method: "POST", mode: "no-cors",
@@ -178,8 +186,10 @@ async function handleOutcome(status) {
                 missed: missed
             })
         });
-        debugDiv.innerText = "✅ Asana Updated.";
-    } catch (e) { debugDiv.innerText = "Error syncing."; }
+        debugDiv.innerText = `✅ Asana Updated Successfully!\nOrder: ${patientData.order_code}`;
+    } catch (e) { 
+        debugDiv.innerText = `❌ Error updating Asana.\nOrder: ${patientData.order_code}\n${e.message}`; 
+    }
 
     setTimeout(() => { 
         window.location.href = (status === 'REFUSED') ? "asana://" : patientData.cb; 
