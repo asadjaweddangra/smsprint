@@ -13,7 +13,6 @@
     .title { font-size: 22px; font-weight: 800; margin-bottom: 15px; }
     .patient-box { background: #f8f9fa; padding: 15px; border-radius: 12px; text-align: left; margin-bottom: 20px; border-left: 5px solid #007bff; }
     
-    /* RICH LABEL PREVIEW */
     .labelPreview { margin-top: 8px; text-align: left; }
     .labelRow { border: 1px solid #eee; border-radius: 12px; padding: 12px; margin-top: 10px; background: #fff; position: relative; overflow: hidden; }
     .labelRow.sendout::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 8px; background: #000; }
@@ -24,7 +23,6 @@
     .barcodeLine { font-size: 16px; font-weight: 900; letter-spacing: 0.3px; }
     .testsLine { margin-top: 6px; font-size: 13px; color:#111; line-height: 1.2; }
     
-    /* WORKFLOW BUTTONS */
     .btn { display: block; width: 100%; padding: 18px; margin-top: 12px; border-radius: 12px; font-size: 18px; font-weight: 700; border: none; cursor: pointer; text-decoration: none; box-sizing: border-box; }
     .btn-print { background: #007bff; color: white; }
     .btn-success { background: #28a745; color: white; }
@@ -52,11 +50,11 @@
 
   <div id="confirmView">
     <div class="title">2. Collection Status</div>
-    <p style="font-size: 14px; color: #555;">Verify label against patient ID, attach to tube, then select outcome:</p>
-    
+    <p style="font-size: 14px; color: #555;">Labels sent to printer. Attach labels to tubes, then confirm:</p>
     <button onclick="handleOutcome('SUCCESS')" class="btn btn-success">✅ Yes, Collection Complete</button>
     <button onclick="handleOutcome('HANDWRITE')" class="btn btn-warn">✍️ Printer Failed (Hand-write)</button>
     <button onclick="handleOutcome('REFUSED')" class="btn btn-danger">❌ Unable to Draw / Refused</button>
+    <button onclick="resetWorkflow()" style="background:none; border:none; color:#007bff; margin-top:15px; cursor:pointer; font-weight:bold;">← Reprint Labels</button>
   </div>
 
   <div id="debug" class="debug">System Ready.</div>
@@ -64,15 +62,11 @@
 
 <script>
 /* ============================================================
-   CONFIGURATION: Switch modes here
-   Options: "ARROWHEAD" (Direct App) or "SHORTCUT" (iOS Shortcuts)
+   CONFIGURATION
    ============================================================ */
 const ANDROID_MODE = "ARROWHEAD"; 
 const IOS_MODE     = "ARROWHEAD"; 
 
-/* ============================
-   DETECTION & GLOBALS
-============================ */
 const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 const isAndroid = () => /Android/i.test(navigator.userAgent);
 const isWindows = () => /Win/.test(navigator.platform);
@@ -80,16 +74,12 @@ const isWindows = () => /Win/.test(navigator.platform);
 let patientData = {};
 let finalZpl = "";
 
-/* ============================
-   INITIALIZATION
-============================ */
 function init() {
     const hash = window.location.hash.substring(1);
     const params = new URLSearchParams(hash);
     
     const os = isIOS() ? "iOS" : (isAndroid() ? "Android" : (isWindows() ? "Windows" : "Unknown"));
-    const mode = isIOS() ? IOS_MODE : (isAndroid() ? ANDROID_MODE : "Serial");
-    document.getElementById("platformPill").innerText = `${os} Mode: ${mode}`;
+    document.getElementById("platformPill").innerText = `${os} Mode: ${isIOS() ? IOS_MODE : ANDROID_MODE}`;
 
     patientData = {
         name: decodeURIComponent(params.get("name") || ""),
@@ -108,35 +98,31 @@ function init() {
 
     document.getElementById("name").innerText = patientData.name;
     document.getElementById("dob").innerText = patientData.dob;
-
     renderLabels();
 
     document.getElementById("printBtn").onclick = () => {
-        executePrint();
-        // Transition to Verification State
+        // 1. Switch UI First (So if the app crashes, the user is already on step 2)
         document.getElementById("printView").style.display = "none";
         document.getElementById("confirmView").style.display = "block";
-        // Privacy: Scrub URL after print
-        setTimeout(() => { history.replaceState(null, "", window.location.pathname); }, 500);
+        
+        // 2. Execute Print
+        executePrint();
     };
 }
 
 function renderLabels() {
     let uiHtml = "";
     finalZpl = "";
-
     patientData.items.forEach((item, i) => {
         if (!item) return;
         let [bc, qty] = item.split("*");
         qty = parseInt(qty) || 1;
-        
         const lblType = (patientData.label[i] || "IH").toUpperCase();
         const tst = patientData.tests[i] || "";
         const stype = patientData.st[i] || "";
         const isSO = lblType === "SO";
 
-        uiHtml += `
-            <div class="labelRow ${isSO ? 'sendout' : ''}">
+        uiHtml += `<div class="labelRow ${isSO ? 'sendout' : ''}">
                 <div class="labelMetaTop">
                     <span class="labelTag ${isSO ? 'so' : 'ih'}">${isSO ? 'SO' : 'IH'}</span>
                     <span style="font-size:11px; font-weight:700; color:#666;">QTY: ${qty}</span>
@@ -145,7 +131,6 @@ function renderLabels() {
                 <div class="testsLine"><strong>${stype}</strong> - ${tst}</div>
             </div>`;
         
-        // ZPL Generation
         const border = isSO ? 15 : 0;
         finalZpl += `^XA^MMT^MNM^PR6^MD30^FO0,10^GB385,${border},${border}^FS`;
         finalZpl += `^FO20,25^A0N,32,32^FD${patientData.name.substring(0,25)}^FS`;
@@ -155,26 +140,21 @@ function renderLabels() {
         finalZpl += `^FO12,200^A0N,20,20^FB350,2,0,L,0^FD${tst.substring(0,60)}^FS`;
         finalZpl += `^PQ${qty},0,1,Y^XZ\r\n`;
     });
-
     document.getElementById("labelPreview").innerHTML = uiHtml;
 }
 
-/* ============================
-   EXECUTION & PRINTING
-============================ */
 function executePrint() {
-    const cleanZpl = finalZpl.replace(/[^\x00-\x7F]/g, ""); // Remove non-ASCII
+    const cleanZpl = finalZpl.replace(/[^\x00-\x7F]/g, ""); 
     const b64 = btoa(cleanZpl).replace(/=/g, "_");
     
-    // Capture the current URL to tell MobiPrint where to return to
-    const returnUrl = window.location.href;
+    // We send a simplified return URL to avoid iOS buffer limits
+    const returnUrl = window.location.origin + window.location.pathname + window.location.hash;
 
     if (isWindows()) {
         printViaSerial(finalZpl);
     } 
     else if (isAndroid()) {
         if (ANDROID_MODE === "ARROWHEAD") {
-            // Android uses x-success in the intent
             window.location.href = `intent://x-callback-url/zplcode?code=${b64}&x-success=${encodeURIComponent(returnUrl)}#Intent;scheme=arrowhead;package=com.mobiprintpro.retail.android;end`;
         } else {
             window.location.href = "shortcuts://run-shortcut?name=SMS-Print&text=" + encodeURIComponent(window.location.hash.substring(1));
@@ -182,39 +162,32 @@ function executePrint() {
     } 
     else if (isIOS()) {
         if (IOS_MODE === "ARROWHEAD") {
-            // iOS: Added x-success parameter to the arrowhead scheme
-            // This tells MobiPrint to redirect back to this page after printing
-            window.location.href = `arrowhead://x-callback-url/zplcode?code=${encodeURIComponent(b64)}&x-success=${encodeURIComponent(returnUrl)}`;
+            // Updated iOS Arrowhead string with explicit success callback
+            const iosLink = `arrowhead://x-callback-url/zplcode?code=${encodeURIComponent(b64)}&x-success=${encodeURIComponent(returnUrl)}&x-source=Browser`;
+            window.location.href = iosLink;
         } else {
             window.location.href = "shortcuts://run-shortcut?name=SMS-Print&input=text&text=" + encodeURIComponent(window.location.hash.substring(1));
         }
     }
 }
 
-/* ============================
-   OUTCOME HANDLERS
-============================ */
+function resetWorkflow() {
+    document.getElementById("confirmView").style.display = "none";
+    document.getElementById("printView").style.display = "block";
+}
+
 function handleOutcome(status) {
     const cb = patientData.cb;
-    switch(status) {
-        case 'SUCCESS':
-            window.location.href = cb;
-            break;
-        case 'HANDWRITE':
-            // Appends status to callback for middleware logging
-            const separator = cb.includes('?') ? '&' : '?';
-            window.location.href = `${cb}${separator}status=handwritten`;
-            break;
-        case 'REFUSED':
-            // Return to Asana without completing task
-            window.location.href = "asana://";
-            break;
+    if (status === 'SUCCESS') {
+        window.location.href = cb;
+    } else if (status === 'HANDWRITE') {
+        const separator = cb.includes('?') ? '&' : '?';
+        window.location.href = `${cb}${separator}status=handwritten`;
+    } else {
+        window.location.href = "asana://";
     }
 }
 
-/* ============================
-   WINDOWS SERIAL ENGINE
-============================ */
 async function printViaSerial(zpl) {
     try {
         const port = await navigator.serial.requestPort();
@@ -223,14 +196,10 @@ async function printViaSerial(zpl) {
         await writer.write(new TextEncoder().encode(zpl));
         writer.releaseLock();
         await port.close();
-        document.getElementById("debug").innerText = "Print sent to Serial Port.";
-    } catch (e) {
-        document.getElementById("debug").innerText = "Serial Error: " + e.message;
-    }
+    } catch (e) { document.getElementById("debug").innerText = "Serial Error: " + e.message; }
 }
 
 window.onload = init;
 </script>
 </body>
 </html>
-
