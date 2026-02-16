@@ -65,7 +65,7 @@
    CONFIGURATION
    ============================================================ */
 const ANDROID_MODE = "ARROWHEAD"; 
-const IOS_MODE     = "ARROWHEAD"; 
+const IOS_MODE     = "SHORTCUT"; 
 
 const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 const isAndroid = () => /Android/i.test(navigator.userAgent);
@@ -203,3 +203,4 @@ window.onload = init;
 </script>
 </body>
 </html>
+
