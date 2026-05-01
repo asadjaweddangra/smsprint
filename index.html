@@ -51,6 +51,10 @@
 
   <div id="confirmView">
     <div class="title">2. Final Collection</div>
+    <div class="patient-box">
+      <strong>Patient:</strong> <span id="name2">—</span><br>
+      <strong>DOB:</strong> <span id="dob2">—</span>
+    </div>
     <div class="patient-box" style="border-left-color: #28a745;">
         <strong>Confirm Samples Collected:</strong>
         <div id="labelPreview2"></div>
@@ -72,11 +76,17 @@ const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzFK7SvlJZhAi
 const IOS_MODE = "SHORTCUT"; // Options: "ARROWHEAD" or "SHORTCUT"
 const ANDROID_MODE = "ARROWHEAD";
 
+/* Windows: Zebra Browser Print local service.
+   Default endpoint listens on http://localhost:9100.
+   Install from: https://www.zebra.com/us/en/support-downloads/printer-software/printer-setup-utilities.html */
+const BROWSER_PRINT_URL = "http://localhost:9100";
+
 const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 const isAndroid = () => /Android/i.test(navigator.userAgent);
+const isDesktop = () => !isIOS() && !isAndroid();
 
 let patientData = {};
-let finalZpl = "";
+let zplByIndex = {}; // per-item ZPL, keyed by item index — assembled at print time
 
 /* Logic: Ignore index 0, Ignore last 2. Prefix SM2(FirstDigit)- */
 function convertBarcodeToOrderCode(barcode) {
@@ -91,7 +101,7 @@ function init() {
     const rawItems = decodeURIComponent(params.get("items") || "");
     const firstBarcode = rawItems.split("|")[0].split("*")[0];
 
-    document.getElementById("platformPill").innerText = isIOS() ? `iOS (${IOS_MODE})` : (isAndroid() ? "Android" : "Windows");
+    document.getElementById("platformPill").innerText = isIOS() ? `iOS (${IOS_MODE})` : (isAndroid() ? "Android" : "Windows (Browser Print)");
 
     patientData = {
         name: decodeURIComponent(params.get("name") || ""),
@@ -107,11 +117,13 @@ function init() {
     if(!patientData.name) return;
     document.getElementById("name").innerText = patientData.name;
     document.getElementById("dob").innerText = patientData.dob;
+    document.getElementById("name2").innerText = patientData.name;
+    document.getElementById("dob2").innerText = patientData.dob;
     
     renderLists();
 
-    document.getElementById("printBtn").onclick = () => {
-        executePrint();
+    document.getElementById("printBtn").onclick = async () => {
+        await executePrint();
         document.getElementById("printView").style.display = "none";
         document.getElementById("confirmView").style.display = "block";
         window.scrollTo(0,0);
@@ -120,7 +132,7 @@ function init() {
 
 function renderLists() {
     let uiHtml = "";
-    finalZpl = "";
+    zplByIndex = {};
     patientData.items.forEach((item, i) => {
         if (!item) return;
         let [bc, qty] = item.split("*");
@@ -143,12 +155,27 @@ function renderLists() {
         uiHtml += row('v1');
         
         const border = isSO ? 15 : 0;
-        finalZpl += `^XA^MMT^MNM^PR6^MD30^FO0,10^GB385,${border},${border}^FS^FO20,25^A0N,32,32^FD${patientData.name.substring(0,25)}^FS^FO20,55^A0N,28,28^FD${patientData.dob}^FS^FO20,78^BY2,2,80^BCN,80,Y,N,N^FD${bc}^FS^FO12,180^A0N,20,20^FD${stype.substring(0,30)}^FS^FO12,200^A0N,20,20^FB350,2,0,L,0^FD${tst.substring(0,60)}^FS^PQ${qty},0,1,Y^XZ\r\n`;
+        zplByIndex[i] = `^XA^MMT^MNM^PR6^MD30^FO0,10^GB385,${border},${border}^FS^FO20,25^A0N,32,32^FD${patientData.name.substring(0,25)}^FS^FO20,55^A0N,28,28^FD${patientData.dob}^FS^FO20,78^BY2,2,80^BCN,80,Y,N,N^FD${bc}^FS^FO12,180^A0N,20,20^FD${stype.substring(0,30)}^FS^FO12,200^A0N,20,20^FB350,2,0,L,0^FD${tst.substring(0,60)}^FS^PQ${qty},0,1,Y^XZ\r\n`;
     });
 
     document.getElementById("labelPreview1").innerHTML = uiHtml;
     // Map same HTML to View 2 but change IDs and toggle function source
     document.getElementById("labelPreview2").innerHTML = uiHtml.replace(/check-v1-/g, 'check-v2-').replace(/toggleCheck\((.*), 'v1'\)/g, "toggleCheck($1, 'v2')").replace(/syncChecks\((.*), 'v1'\)/g, "syncChecks($1, 'v2')");
+}
+
+/* Build ZPL only for items checked in the print view (v1) */
+function buildZplForChecked() {
+    let zpl = "";
+    let count = 0;
+    patientData.items.forEach((item, i) => {
+        if (!item) return;
+        const cb = document.getElementById(`check-v1-${i}`);
+        if (cb && cb.checked && zplByIndex[i]) {
+            zpl += zplByIndex[i];
+            count++;
+        }
+    });
+    return { zpl, count };
 }
 
 function toggleCheck(index, source) {
@@ -192,17 +219,68 @@ async function handleOutcome(status) {
     }
 
     setTimeout(() => { 
+        // On desktop, asana:// won't do anything useful — stay put.
+        if (isDesktop()) return;
         window.location.href = (status === 'REFUSED') ? "asana://" : patientData.cb; 
     }, 1200);
 }
 
-function executePrint() {
-    const b64 = btoa(finalZpl.replace(/[^\x00-\x7F]/g, "")).replace(/=/g, "_");
-    const returnUrl = window.location.href;
-    if (isAndroid()) window.location.href = `intent://x-callback-url/zplcode?code=${b64}&x-success=${encodeURIComponent(returnUrl)}#Intent;scheme=arrowhead;package=com.mobiprintpro.retail.android;end`;
-    else if (isIOS()) {
-        if (IOS_MODE === "ARROWHEAD") window.location.href = `arrowhead://x-callback-url/zplcode?code=${encodeURIComponent(b64)}&x-success=${encodeURIComponent(returnUrl)}`;
-        else window.location.href = "shortcuts://run-shortcut?name=SMSPrint&input=text&text=" + encodeURIComponent(window.location.hash.substring(1));
+async function executePrint() {
+    const debugDiv = document.getElementById("debug");
+
+    // Build ZPL from only the checked rows in the print view
+    const { zpl: finalZpl, count } = buildZplForChecked();
+    if (count === 0) {
+        debugDiv.innerText = `⚠️ No labels selected — nothing sent to printer.`;
+        return;
+    }
+
+    // ---------- ANDROID ----------
+    if (isAndroid()) {
+        const b64 = btoa(finalZpl.replace(/[^\x00-\x7F]/g, "")).replace(/=/g, "_");
+        const returnUrl = window.location.href;
+        window.location.href = `intent://x-callback-url/zplcode?code=${b64}&x-success=${encodeURIComponent(returnUrl)}#Intent;scheme=arrowhead;package=com.mobiprintpro.retail.android;end`;
+        return;
+    }
+
+    // ---------- iOS ----------
+    if (isIOS()) {
+        const b64 = btoa(finalZpl.replace(/[^\x00-\x7F]/g, "")).replace(/=/g, "_");
+        const returnUrl = window.location.href;
+        if (IOS_MODE === "ARROWHEAD") {
+            window.location.href = `arrowhead://x-callback-url/zplcode?code=${encodeURIComponent(b64)}&x-success=${encodeURIComponent(returnUrl)}`;
+        } else {
+            window.location.href = "shortcuts://run-shortcut?name=SMSPrint&input=text&text=" + encodeURIComponent(window.location.hash.substring(1));
+        }
+        return;
+    }
+
+    // ---------- WINDOWS / DESKTOP via Zebra Browser Print ----------
+    debugDiv.innerText = `🖨️ Sending ${count} label(s) to Browser Print...`;
+    try {
+        // Find the default printer
+        const dRes = await fetch(`${BROWSER_PRINT_URL}/default?type=printer`, { method: "GET" });
+        if (!dRes.ok) throw new Error(`Browser Print not reachable (HTTP ${dRes.status})`);
+        const printer = await dRes.json();
+        if (!printer || !printer.uid) throw new Error("No default Zebra printer configured in Browser Print.");
+
+        // Send the ZPL
+        const wRes = await fetch(`${BROWSER_PRINT_URL}/write`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ device: printer, data: finalZpl })
+        });
+        if (!wRes.ok) throw new Error(`Print failed (HTTP ${wRes.status})`);
+
+        debugDiv.innerText = `✅ Sent ${count} label(s) to: ${printer.name || printer.uid}`;
+    } catch (e) {
+        debugDiv.innerText =
+            `❌ Browser Print error: ${e.message}\n\n` +
+            `Fix:\n` +
+            `1. Install Zebra Browser Print (zebra.com → Support → Printer Software)\n` +
+            `2. Make sure the service is running (system tray)\n` +
+            `3. Set a default printer in Browser Print\n` +
+            `4. If page is HTTPS, trust the Browser Print cert at https://localhost:9101`;
     }
 }
 
