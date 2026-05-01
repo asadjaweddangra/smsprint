@@ -78,7 +78,9 @@ const ANDROID_MODE = "ARROWHEAD";
 
 /* Windows: Zebra Browser Print local service.
    Default endpoint listens on http://localhost:9100.
-   Install from: https://www.zebra.com/us/en/support-downloads/printer-software/printer-setup-utilities.html */
+   Install from: https://www.zebra.com/us/en/support-downloads/printer-software/printer-setup-utilities.html
+   Desktop printer (ZD411) uses the same mobile ZPL — content prints in the
+   corner of the 2.25"x1.25" label; no separate layout. */
 const BROWSER_PRINT_URL = "http://localhost:9100";
 
 const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
@@ -86,7 +88,7 @@ const isAndroid = () => /Android/i.test(navigator.userAgent);
 const isDesktop = () => !isIOS() && !isAndroid();
 
 let patientData = {};
-let zplByIndex = {}; // per-item ZPL, keyed by item index — assembled at print time
+let zplByIndex = {}; // single ZPL layout used by iOS, Android, and Windows
 
 /* Logic: Ignore index 0, Ignore last 2. Prefix SM2(FirstDigit)- */
 function convertBarcodeToOrderCode(barcode) {
@@ -133,6 +135,7 @@ function init() {
 function renderLists() {
     let uiHtml = "";
     zplByIndex = {};
+
     patientData.items.forEach((item, i) => {
         if (!item) return;
         let [bc, qty] = item.split("*");
@@ -228,12 +231,8 @@ async function handleOutcome(status) {
 async function executePrint() {
     const debugDiv = document.getElementById("debug");
 
-    // Build ZPL from only the checked rows in the print view
     const { zpl: finalZpl, count } = buildZplForChecked();
-    if (count === 0) {
-        debugDiv.innerText = `⚠️ No labels selected — nothing sent to printer.`;
-        return;
-    }
+    if (count === 0) { debugDiv.innerText = `⚠️ No labels selected — nothing sent to printer.`; return; }
 
     // ---------- ANDROID ----------
     if (isAndroid()) {
@@ -256,6 +255,10 @@ async function executePrint() {
     }
 
     // ---------- WINDOWS / DESKTOP via Zebra Browser Print ----------
+    // ZD411 with 2.25"x1.25" labels — same mobile ZPL prints in the corner, no scaling.
+    // Swap mark sensing (^MNM) for gap/web sensing (^MNW) — desktop label stock has
+    // gaps between labels, not black registration marks. Mobile ZPL is unchanged.
+    const winZpl = finalZpl.replace(/\^MNM/g, "^MNW");
     debugDiv.innerText = `🖨️ Sending ${count} label(s) to Browser Print...`;
     try {
         // Find the default printer
@@ -268,7 +271,7 @@ async function executePrint() {
         const wRes = await fetch(`${BROWSER_PRINT_URL}/write`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ device: printer, data: finalZpl })
+            body: JSON.stringify({ device: printer, data: winZpl })
         });
         if (!wRes.ok) throw new Error(`Print failed (HTTP ${wRes.status})`);
 
