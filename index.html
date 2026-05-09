@@ -53,25 +53,8 @@
       <strong>Order:</strong> <a id="L_order" target="_blank" rel="noopener">—</a>
     </div>
     <div id="L_samples"></div>
-    <button id="btnGoCollect" class="btn btn-collect">🩸 Mark Collected</button>
     <button id="btnGoPrint"   class="btn btn-print">🖨️ Print Labels</button>
     <button id="btnGoRefuse"  class="btn btn-refuse">❌ Refused / Unable to Draw</button>
-  </div>
-
-  <!-- ============== SCREEN: COLLECT ============== -->
-  <div id="collectView" class="view">
-    <div class="title">Mark Collected</div>
-    <div class="patient-box">
-      <strong>Patient:</strong> <span id="C_name">—</span><br>
-      <strong>DOB:</strong> <span id="C_dob">—</span><br>
-      <strong>Order:</strong> <a id="C_order" target="_blank" rel="noopener">—</a>
-    </div>
-    <div style="text-align:left; margin-bottom:8px; color:#666; font-size:13px;">
-      Check the samples that were collected:
-    </div>
-    <div id="C_samples"></div>
-    <button id="btnConfirmCollect" class="btn btn-collect">✅ Confirm Collection</button>
-    <button onclick="showView('landingView')" class="btn-back">← Back</button>
   </div>
 
   <!-- ============== SCREEN: REFUSE ============== -->
@@ -133,11 +116,11 @@
 /* ============================================================
    CONFIG — only non-secrets here. Real tokens live in Apps Script.
    ============================================================ */
-const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwFPRtFzpQFLKjxp7IThyzwzX-hzhtrGs9SlURHLh6HR2_1iSibgmr_blkidKjQqH-muQ/exec";
+const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz3idUWxjZ28QBX9yt-aKGBgdJS1ChubPdpyayU8q990WmSL9UXsYHgZZuWRCKOjiEXUg/exec";
 
 // Must match PORTAL_SHARED_SECRET in Apps Script Script Properties.
 // Not a real secret — just a "this is the portal calling" gate.
-const SHARED_SECRET = "7a5e4e2ac4e5768e9866661184c4dd5691bddb45cc17ab813ea3c9ce5893cb9f";
+const SHARED_SECRET = "REPLACE_WITH_RANDOM_STRING_MATCHING_APPS_SCRIPT";
 
 const IOS_MODE = "SHORTCUT"; // "ARROWHEAD" or "SHORTCUT"
 const BROWSER_PRINT_URL = "http://localhost:9100";
@@ -195,7 +178,7 @@ function init() {
     ? `https://sms.dendisoftware.com/orders/${encodeURIComponent(patientData.order_code)}/`
     : "";
 
-  ["L", "C", "R", "P", "V"].forEach(prefix => {
+  ["L", "R", "P", "V"].forEach(prefix => {
     const n = document.getElementById(`${prefix}_name`); if (n) n.innerText = patientData.name;
     const d = document.getElementById(`${prefix}_dob`);  if (d) d.innerText = patientData.dob;
     const o = document.getElementById(`${prefix}_order`);
@@ -231,21 +214,11 @@ async function bootstrap() {
 }
 
 function wireButtons() {
-  document.getElementById("btnGoCollect").onclick = () => showView("collectView");
   document.getElementById("btnGoPrint").onclick   = () => showView("printView");
   document.getElementById("btnGoRefuse").onclick  = () => showView("refuseView");
-  document.getElementById("btnConfirmCollect").onclick = onMarkCollected;
   document.getElementById("btnConfirmRefuse").onclick  = onRefuse;
   document.getElementById("btnMarkReceived").onclick   = onMarkReceived;
   document.getElementById("printBtn").onclick = async () => {
-    // Mobile (Android/iOS): print = collection event.
-    // Push collection_date to Dendi BEFORE we navigate to the printer app —
-    // mobile print uses URL schemes that unload this page, which would cancel
-    // any in-flight fetch.
-    if (isIOS() || isAndroid()) {
-      const ok = await pushCollectionFromPrintScreen();
-      if (!ok) return; // pushCollection logs the error; don't print on failure
-    }
     // All platforms: send to printer
     await executePrint();
     // Windows only: stay on the page and advance to Mark Received
@@ -256,48 +229,8 @@ function wireButtons() {
   };
 }
 
-/**
- * Read v1 (print-screen) checkboxes and POST mark_collected to the broker.
- * Returns true on success, false on failure (caller halts the print).
- */
-async function pushCollectionFromPrintScreen() {
-  const collected = [], missed = [];
-  patientData.items.forEach((item, i) => {
-    if (!item) return;
-    const bc = item.split("*")[0];
-    const cb = document.getElementById(`check-v1-${i}`);
-    if (cb && cb.checked) collected.push(bc); else missed.push(bc);
-  });
-  if (collected.length === 0) {
-    log("⚠️ No samples checked — uncheck Print or check at least one sample.");
-    return false;
-  }
-  log(`🩸 Logging collection in Dendi for ${collected.length} sample(s)…`);
-  try {
-    const r = await callBroker({
-      action: "mark_collected",
-      order_code: patientData.order_code,
-      order_uuid: patientData.order_uuid || undefined,
-      phleb_email: patientData.phleb_email || undefined,
-      phleb_name: patientData.phleb_name || undefined,
-      collected_barcodes: collected,
-      missed_barcodes: missed,
-      when: new Date().toISOString()
-    });
-    if (!r.ok) {
-      log(`❌ Collection log failed: ${r.error || "unknown error"}`);
-      return false;
-    }
-    log(`✅ Collection logged. Sending to printer…`);
-    return true;
-  } catch (e) {
-    log(`❌ Collection log failed: ${e.message}`);
-    return false;
-  }
-}
-
 function renderLists() {
-  let landingHtml = "", collectHtml = "", printHtml = "";
+  let landingHtml = "", printHtml = "";
   zplByIndex = {};
 
   patientData.items.forEach((item, i) => {
@@ -327,15 +260,13 @@ function renderLists() {
         </div>
       </div>`;
 
-    collectHtml += cbRow('c');
-    printHtml   += cbRow('v1');
+    printHtml += cbRow('v1');
 
     const border = isSO ? 15 : 0;
     zplByIndex[i] = `^XA^MMT^MNM^PR6^MD30^FO0,10^GB385,${border},${border}^FS^FO20,25^A0N,32,32^FD${patientData.name.substring(0,25)}^FS^FO20,55^A0N,28,28^FD${patientData.dob}^FS^FO20,78^BY2,2,80^BCN,80,Y,N,N^FD${bc}^FS^FO12,180^A0N,20,20^FD${stype.substring(0,30)}^FS^FO12,200^A0N,20,20^FB350,2,0,L,0^FD${tst.substring(0,60)}^FS^PQ${qty},0,1,Y^XZ\r\n`;
   });
 
   document.getElementById("L_samples").innerHTML = landingHtml;
-  document.getElementById("C_samples").innerHTML = collectHtml;
   document.getElementById("labelPreview1").innerHTML = printHtml;
   document.getElementById("labelPreview2").innerHTML = printHtml
     .replace(/check-v1-/g, 'check-v2-')
@@ -349,43 +280,11 @@ function toggleCheck(index, source) {
   syncChecks(index, source);
 }
 function syncChecks(index, source) {
-  if (source === 'c') return;
+  // Print and Receive screens both have checkboxes that mirror each other.
   const other = source === 'v1' ? 'v2' : 'v1';
   const me   = document.getElementById(`check-${source}-${index}`);
   const mate = document.getElementById(`check-${other}-${index}`);
   if (me && mate) mate.checked = me.checked;
-}
-
-async function onMarkCollected() {
-  const btn = document.getElementById("btnConfirmCollect");
-  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>Saving...';
-
-  const collected = [], missed = [];
-  patientData.items.forEach((item, i) => {
-    if (!item) return;
-    const bc = item.split("*")[0];
-    const cb = document.getElementById(`check-c-${i}`);
-    if (cb && cb.checked) collected.push(bc); else missed.push(bc);
-  });
-
-  log(`🩸 Marking collected: ${collected.length} / ${patientData.items.filter(Boolean).length}`);
-  try {
-    const r = await callBroker({
-      action: "mark_collected",
-      order_code: patientData.order_code,
-      order_uuid: patientData.order_uuid || undefined,
-      phleb_email: patientData.phleb_email || undefined,
-      phleb_name: patientData.phleb_name || undefined,
-      collected_barcodes: collected,
-      missed_barcodes: missed,
-      when: new Date().toISOString()
-    });
-    if (!r.ok) throw new Error(r.error || "Unknown error");
-    finishDone("Collection Logged", `${collected.length} sample(s) marked collected in Dendi.`);
-  } catch (e) {
-    btn.disabled = false; btn.innerHTML = '✅ Confirm Collection';
-    log(`❌ Mark Collected failed: ${e.message}`);
-  }
 }
 
 async function onRefuse() {
