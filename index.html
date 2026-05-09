@@ -75,6 +75,10 @@
     <div style="text-align:left; margin-bottom:8px; color:#666; font-size:13px;">Reason:</div>
     <select id="rejectionReason"><option value="">Loading reasons…</option></select>
     <textarea id="rejectionNote" placeholder="Optional note (e.g. patient asleep, refused after explanation)" rows="3"></textarea>
+    <label style="display:flex; align-items:center; gap:10px; padding:12px; margin-top:10px; background:#fff5f5; border:1px solid #ffd6d6; border-radius:10px; text-align:left; cursor:pointer;">
+      <input type="checkbox" id="skipRecollect" class="cb-input">
+      <span style="font-size:14px;"><strong>Skip recollect</strong> — don't create a new order for next day</span>
+    </label>
     <button id="btnConfirmRefuse" class="btn btn-refuse">❌ Confirm Refusal</button>
     <button onclick="showView('landingView')" class="btn-back">← Back</button>
   </div>
@@ -123,7 +127,7 @@
 /* ============================================================
    CONFIG — only non-secrets here. Real tokens live in Apps Script.
    ============================================================ */
-const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyiPrUWUZWyMVyLYLcHthoUJul1K9cy59_GwjAg2OMpVqqNULMQ58JTxHEMmKU7g8GUwg/exec";
+const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyxWLgI7-Nkq2zVOTHed5EdrSz8OBDtWPQeP4FecVBOmbK-ID7ELdIbQ1ZEzIcp4j_65A/exec";
 
 // Must match PORTAL_SHARED_SECRET in Apps Script Script Properties.
 // Not a real secret — just a "this is the portal calling" gate.
@@ -206,17 +210,25 @@ function init() {
 }
 
 async function bootstrap() {
+  const sel = document.getElementById("rejectionReason");
   try {
     const r = await callBroker({ action: "bootstrap" });
-    if (r.ok && r.rejection_reasons) {
+    if (r.ok && r.rejection_reasons && r.rejection_reasons.length) {
       rejectionReasons = r.rejection_reasons;
-      const sel = document.getElementById("rejectionReason");
       sel.innerHTML = '<option value="">— select reason —</option>' +
         rejectionReasons.map(rr => `<option value="${rr.uuid}">${escapeHtml(rr.name)}</option>`).join("");
+      log(`✓ Loaded ${rejectionReasons.length} rejection reasons.`);
+    } else if (r.ok && (!r.rejection_reasons || r.rejection_reasons.length === 0)) {
+      sel.innerHTML = '<option value="">⚠️ No reasons configured in Dendi</option>';
+      log("⚠️ Broker returned 0 rejection reasons. Add reasons in Dendi Admin.");
+    } else {
+      // r.ok === false → broker returned an error (typically Unauthorized or Dendi fetch failed)
+      sel.innerHTML = '<option value="">⚠️ Broker error — see log</option>';
+      log(`⚠️ Bootstrap broker error: ${r.error || "(unknown)"}`);
     }
   } catch (e) {
-    document.getElementById("rejectionReason").innerHTML = '<option value="">⚠️ Could not load reasons</option>';
-    log(`⚠️ Bootstrap failed: ${e.message}`);
+    sel.innerHTML = '<option value="">⚠️ Could not reach broker</option>';
+    log(`⚠️ Bootstrap network error: ${e.message}`);
   }
 }
 
@@ -233,6 +245,9 @@ function wireButtons() {
   document.getElementById("btnGoRefuse").onclick = () => {
     // Populate the "Will be rejected" preview with the UNCHECKED barcodes
     populateRefusePreview();
+    // Reset skip-recollect to default-off each time the screen opens
+    const sk = document.getElementById("skipRecollect");
+    if (sk) sk.checked = false;
     showView("refuseView");
   };
   document.getElementById("btnConfirmRefuse").onclick  = onRefuse;
@@ -343,15 +358,16 @@ async function onRefuse() {
   btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>Saving...';
 
   const note = document.getElementById("rejectionNote").value.trim();
+  const skipRecollect = document.getElementById("skipRecollect").checked;
   const refusedBarcodes = getUncheckedBarcodesOnLanding();
   // If empty (everything still checked), broker treats it as a full-order refuse.
   // If populated, broker rejects only those specific samples' panels and creates a
-  // partial recollect.
+  // partial recollect (unless skipRecollect is true).
   const isFullOrder = refusedBarcodes.length === 0;
 
   log(isFullOrder
-    ? "❌ Refusing entire order in Dendi"
-    : `❌ Refusing ${refusedBarcodes.length} sample(s) in Dendi: ${refusedBarcodes.join(", ")}`);
+    ? `❌ Refusing entire order in Dendi${skipRecollect ? " (no recollect)" : ""}`
+    : `❌ Refusing ${refusedBarcodes.length} sample(s) in Dendi${skipRecollect ? " (no recollect)" : ""}: ${refusedBarcodes.join(", ")}`);
 
   try {
     const r = await callBroker({
@@ -361,13 +377,16 @@ async function onRefuse() {
       rejection_reason_uuid: reasonUuid,
       rejection_note: note || undefined,
       refused_barcodes: refusedBarcodes,           // empty = whole order
+      skip_recollect: skipRecollect,
       phleb_email: patientData.phleb_email || undefined,
       phleb_name: patientData.phleb_name || undefined
     });
     if (!r.ok) throw new Error(r.error || r.reject_error || "Unknown error");
     finishDone(
       isFullOrder ? "Order Refused" : "Samples Refused",
-      isFullOrder ? "Entire order rejected in Dendi." : `${refusedBarcodes.length} sample(s) rejected in Dendi.`
+      isFullOrder
+        ? `Entire order rejected in Dendi${skipRecollect ? " (no recollect created)" : "."}`
+        : `${refusedBarcodes.length} sample(s) rejected in Dendi${skipRecollect ? " (no recollect created)" : "."}`
     );
   } catch (e) {
     btn.disabled = false; btn.innerHTML = '❌ Confirm Refusal';
