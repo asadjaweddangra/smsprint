@@ -10,6 +10,8 @@
     .view.active { display: block; }
     .title { font-size: 22px; font-weight: 800; margin-bottom: 15px; }
     .patient-box { background: #f8f9fa; padding: 15px; border-radius: 12px; text-align: left; margin-bottom: 20px; border-left: 5px solid #007bff; }
+    .patient-box a { color: #0a58ca; text-decoration: underline; word-break: break-all; }
+    .patient-box a:active { color: #052c65; }
 
     .labelRow { border: 1px solid #eee; border-radius: 12px; padding: 12px; margin-top: 10px; background: #fff; position: relative; overflow: hidden; display: flex; align-items: center; gap: 12px; cursor: pointer; text-align: left; transition: background 0.1s; }
     .labelRow:hover { background: #fafafa; }
@@ -47,7 +49,8 @@
     <div class="title">Specimen Portal</div>
     <div class="patient-box">
       <strong>Patient:</strong> <span id="L_name">—</span><br>
-      <strong>DOB:</strong> <span id="L_dob">—</span>
+      <strong>DOB:</strong> <span id="L_dob">—</span><br>
+      <strong>Order:</strong> <a id="L_order" target="_blank" rel="noopener">—</a>
     </div>
     <div id="L_samples"></div>
     <button id="btnGoCollect" class="btn btn-collect">🩸 Mark Collected</button>
@@ -60,7 +63,8 @@
     <div class="title">Mark Collected</div>
     <div class="patient-box">
       <strong>Patient:</strong> <span id="C_name">—</span><br>
-      <strong>DOB:</strong> <span id="C_dob">—</span>
+      <strong>DOB:</strong> <span id="C_dob">—</span><br>
+      <strong>Order:</strong> <a id="C_order" target="_blank" rel="noopener">—</a>
     </div>
     <div style="text-align:left; margin-bottom:8px; color:#666; font-size:13px;">
       Check the samples that were collected:
@@ -75,7 +79,8 @@
     <div class="title">Refuse / Unable to Draw</div>
     <div class="patient-box">
       <strong>Patient:</strong> <span id="R_name">—</span><br>
-      <strong>DOB:</strong> <span id="R_dob">—</span>
+      <strong>DOB:</strong> <span id="R_dob">—</span><br>
+      <strong>Order:</strong> <a id="R_order" target="_blank" rel="noopener">—</a>
     </div>
     <div style="text-align:left; margin-bottom:8px; color:#666; font-size:13px;">Reason:</div>
     <select id="rejectionReason"><option value="">Loading reasons…</option></select>
@@ -89,7 +94,8 @@
     <div class="title">1. Verify & Print</div>
     <div class="patient-box">
       <strong>Patient:</strong> <span id="P_name">—</span><br>
-      <strong>DOB:</strong> <span id="P_dob">—</span>
+      <strong>DOB:</strong> <span id="P_dob">—</span><br>
+      <strong>Order:</strong> <a id="P_order" target="_blank" rel="noopener">—</a>
     </div>
     <div id="labelPreview1"></div>
     <button id="printBtn" class="btn btn-print">🖨️ Print Labels</button>
@@ -101,7 +107,8 @@
     <div class="title">2. Mark Received</div>
     <div class="patient-box">
       <strong>Patient:</strong> <span id="V_name">—</span><br>
-      <strong>DOB:</strong> <span id="V_dob">—</span>
+      <strong>DOB:</strong> <span id="V_dob">—</span><br>
+      <strong>Order:</strong> <a id="V_order" target="_blank" rel="noopener">—</a>
     </div>
     <div class="patient-box" style="border-left-color: #28a745;">
         <strong>Confirm Samples Received:</strong>
@@ -130,7 +137,7 @@ const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzFK7SvlJZhAi
 
 // Must match PORTAL_SHARED_SECRET in Apps Script Script Properties.
 // Not a real secret — just a "this is the portal calling" gate.
-const SHARED_SECRET = "7a5e4e2ac4e5768e9866661184c4dd5691bddb45cc17ab813ea3c9ce5893cb9f";
+const SHARED_SECRET = "REPLACE_WITH_RANDOM_STRING_MATCHING_APPS_SCRIPT";
 
 const IOS_MODE = "SHORTCUT"; // "ARROWHEAD" or "SHORTCUT"
 const BROWSER_PRINT_URL = "http://localhost:9100";
@@ -184,9 +191,23 @@ function init() {
 
   if (!patientData.name) return;
 
+  const dendiOrderUrl = patientData.order_code
+    ? `https://sms.dendisoftware.com/orders/${encodeURIComponent(patientData.order_code)}/`
+    : "";
+
   ["L", "C", "R", "P", "V"].forEach(prefix => {
     const n = document.getElementById(`${prefix}_name`); if (n) n.innerText = patientData.name;
     const d = document.getElementById(`${prefix}_dob`);  if (d) d.innerText = patientData.dob;
+    const o = document.getElementById(`${prefix}_order`);
+    if (o) {
+      if (dendiOrderUrl) {
+        o.innerText = patientData.order_code;
+        o.href      = dendiOrderUrl;
+      } else {
+        o.innerText = "—";
+        o.removeAttribute("href");
+      }
+    }
   });
 
   renderLists();
