@@ -44,7 +44,7 @@
 <div class="card">
   <div id="platformPill" class="pill">Detecting...</div>
 
-  <!-- ============== SCREEN 1: LANDING (3 buttons) ============== -->
+  <!-- ============== SCREEN 1: LANDING (checkboxes + 2 buttons) ============== -->
   <div id="landingView" class="view active">
     <div class="title">Specimen Portal</div>
     <div class="patient-box">
@@ -52,9 +52,12 @@
       <strong>DOB:</strong> <span id="L_dob">—</span><br>
       <strong>Order:</strong> <a id="L_order" target="_blank" rel="noopener">—</a>
     </div>
+    <div style="text-align:left; margin-bottom:8px; color:#666; font-size:13px;">
+      Uncheck any sample that was <strong>NOT</strong> drawn (refused/unable):
+    </div>
     <div id="L_samples"></div>
-    <button id="btnGoPrint"   class="btn btn-print">🖨️ Print Labels</button>
-    <button id="btnGoRefuse"  class="btn btn-refuse">❌ Refused / Unable to Draw</button>
+    <button id="btnGoPrint"   class="btn btn-print">🖨️ Print Labels (Checked)</button>
+    <button id="btnGoRefuse"  class="btn btn-refuse">❌ Refuse Unchecked / Unable to Draw</button>
   </div>
 
   <!-- ============== SCREEN: REFUSE ============== -->
@@ -64,6 +67,10 @@
       <strong>Patient:</strong> <span id="R_name">—</span><br>
       <strong>DOB:</strong> <span id="R_dob">—</span><br>
       <strong>Order:</strong> <a id="R_order" target="_blank" rel="noopener">—</a>
+    </div>
+    <div id="R_summary" class="patient-box" style="border-left-color:#dc3545; background:#fff5f5;">
+      <strong>Will be rejected:</strong>
+      <div id="R_rejectList" style="margin-top:6px; font-size:14px;"></div>
     </div>
     <div style="text-align:left; margin-bottom:8px; color:#666; font-size:13px;">Reason:</div>
     <select id="rejectionReason"><option value="">Loading reasons…</option></select>
@@ -116,7 +123,7 @@
 /* ============================================================
    CONFIG — only non-secrets here. Real tokens live in Apps Script.
    ============================================================ */
-const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz3idUWxjZ28QBX9yt-aKGBgdJS1ChubPdpyayU8q990WmSL9UXsYHgZZuWRCKOjiEXUg/exec";
+const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzWDNykZvo8FmsIPPeFLdqTNDDnmzYcKfvKX2Q375qJ806tsp79LbIYarLP56ARHyLbHQ/exec";
 
 // Must match PORTAL_SHARED_SECRET in Apps Script Script Properties.
 // Not a real secret — just a "this is the portal calling" gate.
@@ -214,8 +221,20 @@ async function bootstrap() {
 }
 
 function wireButtons() {
-  document.getElementById("btnGoPrint").onclick   = () => showView("printView");
-  document.getElementById("btnGoRefuse").onclick  = () => showView("refuseView");
+  document.getElementById("btnGoPrint").onclick = () => {
+    // Don't go to print if nothing is checked
+    const checkedCount = countCheckedOnLanding();
+    if (checkedCount === 0) {
+      log("⚠️ Nothing checked. Use Refuse if no samples will be drawn.");
+      return;
+    }
+    showView("printView");
+  };
+  document.getElementById("btnGoRefuse").onclick = () => {
+    // Populate the "Will be rejected" preview with the UNCHECKED barcodes
+    populateRefusePreview();
+    showView("refuseView");
+  };
   document.getElementById("btnConfirmRefuse").onclick  = onRefuse;
   document.getElementById("btnMarkReceived").onclick   = onMarkReceived;
   document.getElementById("printBtn").onclick = async () => {
@@ -227,6 +246,36 @@ function wireButtons() {
       showView("confirmView");
     }
   };
+}
+
+function countCheckedOnLanding() {
+  let n = 0;
+  patientData.items.forEach((_, i) => {
+    const cb = document.getElementById(`check-lnd-${i}`);
+    if (cb && cb.checked) n++;
+  });
+  return n;
+}
+
+function getUncheckedBarcodesOnLanding() {
+  const unchecked = [];
+  patientData.items.forEach((item, i) => {
+    if (!item) return;
+    const cb = document.getElementById(`check-lnd-${i}`);
+    if (cb && !cb.checked) unchecked.push(item.split("*")[0]);
+  });
+  return unchecked;
+}
+
+function populateRefusePreview() {
+  const unchecked = getUncheckedBarcodesOnLanding();
+  const list = document.getElementById("R_rejectList");
+  if (unchecked.length === 0) {
+    // Nothing unchecked → full order rejection
+    list.innerHTML = '<span style="color:#dc3545;font-weight:700;">Entire order — all samples</span>';
+  } else {
+    list.innerHTML = unchecked.map(bc => `• ${escapeHtml(bc)}`).join("<br>");
+  }
 }
 
 function renderLists() {
@@ -241,15 +290,6 @@ function renderLists() {
     const stype = patientData.st[i] || "";
     const isSO = lblType === "SO";
 
-    landingHtml += `
-      <div class="labelRow ${isSO ? 'sendout' : ''}" style="cursor:default;">
-        <div class="labelContent" style="pointer-events:auto;">
-          <span class="labelTag ${isSO ? 'so' : 'ih'}">${lblType}</span>
-          <div class="barcodeLine">${escapeHtml(bc)}</div>
-          <div class="testsLine"><strong>${escapeHtml(stype)}</strong><br>${escapeHtml(tst)}</div>
-        </div>
-      </div>`;
-
     const cbRow = (suffix) => `
       <div class="labelRow ${isSO ? 'sendout' : ''}" onclick="toggleCheck(${i}, '${suffix}')">
         <input type="checkbox" class="cb-input" id="check-${suffix}-${i}" checked onclick="event.stopPropagation(); syncChecks(${i}, '${suffix}')">
@@ -260,7 +300,8 @@ function renderLists() {
         </div>
       </div>`;
 
-    printHtml += cbRow('v1');
+    landingHtml += cbRow('lnd');
+    printHtml   += cbRow('v1');
 
     const border = isSO ? 15 : 0;
     zplByIndex[i] = `^XA^MMT^MNM^PR6^MD30^FO0,10^GB385,${border},${border}^FS^FO20,25^A0N,32,32^FD${patientData.name.substring(0,25)}^FS^FO20,55^A0N,28,28^FD${patientData.dob}^FS^FO20,78^BY2,2,80^BCN,80,Y,N,N^FD${bc}^FS^FO12,180^A0N,20,20^FD${stype.substring(0,30)}^FS^FO12,200^A0N,20,20^FB350,2,0,L,0^FD${tst.substring(0,60)}^FS^PQ${qty},0,1,Y^XZ\r\n`;
@@ -279,12 +320,19 @@ function toggleCheck(index, source) {
   cb.checked = !cb.checked;
   syncChecks(index, source);
 }
+
+/**
+ * 3-way mirror: keep landing (lnd), print (v1), and receive (v2) checkboxes
+ * in sync. Phleb unchecks something on landing → print won't print it,
+ * receive won't expect it.
+ */
 function syncChecks(index, source) {
-  // Print and Receive screens both have checkboxes that mirror each other.
-  const other = source === 'v1' ? 'v2' : 'v1';
-  const me   = document.getElementById(`check-${source}-${index}`);
-  const mate = document.getElementById(`check-${other}-${index}`);
-  if (me && mate) mate.checked = me.checked;
+  const me = document.getElementById(`check-${source}-${index}`);
+  if (!me) return;
+  ["lnd", "v1", "v2"].filter(s => s !== source).forEach(s => {
+    const peer = document.getElementById(`check-${s}-${index}`);
+    if (peer) peer.checked = me.checked;
+  });
 }
 
 async function onRefuse() {
@@ -295,7 +343,16 @@ async function onRefuse() {
   btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>Saving...';
 
   const note = document.getElementById("rejectionNote").value.trim();
-  log(`❌ Rejecting order in Dendi`);
+  const refusedBarcodes = getUncheckedBarcodesOnLanding();
+  // If empty (everything still checked), broker treats it as a full-order refuse.
+  // If populated, broker rejects only those specific samples' panels and creates a
+  // partial recollect.
+  const isFullOrder = refusedBarcodes.length === 0;
+
+  log(isFullOrder
+    ? "❌ Refusing entire order in Dendi"
+    : `❌ Refusing ${refusedBarcodes.length} sample(s) in Dendi: ${refusedBarcodes.join(", ")}`);
+
   try {
     const r = await callBroker({
       action: "refuse",
@@ -303,11 +360,15 @@ async function onRefuse() {
       order_uuid: patientData.order_uuid || undefined,
       rejection_reason_uuid: reasonUuid,
       rejection_note: note || undefined,
+      refused_barcodes: refusedBarcodes,           // empty = whole order
       phleb_email: patientData.phleb_email || undefined,
       phleb_name: patientData.phleb_name || undefined
     });
     if (!r.ok) throw new Error(r.error || r.reject_error || "Unknown error");
-    finishDone("Order Refused", "Order rejected in Dendi.");
+    finishDone(
+      isFullOrder ? "Order Refused" : "Samples Refused",
+      isFullOrder ? "Entire order rejected in Dendi." : `${refusedBarcodes.length} sample(s) rejected in Dendi.`
+    );
   } catch (e) {
     btn.disabled = false; btn.innerHTML = '❌ Confirm Refusal';
     log(`❌ Refuse failed: ${e.message}`);
