@@ -6,32 +6,35 @@
   <style>
     body { font-family: -apple-system, sans-serif; text-align: center; padding: 20px 16px; background: #f4f7f6; color: #111; }
     .card { max-width: 500px; margin: 0 auto; background: #fff; border-radius: 16px; padding: 24px; box-shadow: 0 8px 30px rgba(0,0,0,0.1); }
-    #printView, #confirmView { display: none; }
+    .view { display: none; }
+    .view.active { display: block; }
     .title { font-size: 22px; font-weight: 800; margin-bottom: 15px; }
     .patient-box { background: #f8f9fa; padding: 15px; border-radius: 12px; text-align: left; margin-bottom: 20px; border-left: 5px solid #007bff; }
-    
-    /* SYNCED CHECKLIST STYLES */
+
     .labelRow { border: 1px solid #eee; border-radius: 12px; padding: 12px; margin-top: 10px; background: #fff; position: relative; overflow: hidden; display: flex; align-items: center; gap: 12px; cursor: pointer; text-align: left; transition: background 0.1s; }
     .labelRow:hover { background: #fafafa; }
     .labelRow.sendout::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 8px; background: #000; }
-    
     .cb-input { width: 26px; height: 26px; accent-color: #28a745; flex-shrink: 0; cursor: pointer; pointer-events: auto; }
-    .labelContent { flex: 1; pointer-events: none; } /* Allows the row click to work better */
-    
+    .labelContent { flex: 1; pointer-events: none; }
     .labelTag { display:inline-block; padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 800; background:#f2f2f2; margin-bottom: 4px;}
     .labelTag.so { background:#000; color:#fff; }
     .labelTag.ih { background:#e9f7ee; color:#1f7a39; border:1px solid #bfe8cc; }
     .barcodeLine { font-size: 15px; font-weight: 900; }
     .testsLine { font-size: 13px; color:#111; line-height: 1.2; }
-    
+
     .btn { display: block; width: 100%; padding: 18px; margin-top: 12px; border-radius: 12px; font-size: 18px; font-weight: 700; border: none; cursor: pointer; text-decoration: none; box-sizing: border-box; }
-    .btn-print { background: #007bff; color: white; }
-    .btn-success { background: #28a745; color: white; }
-    .btn-warn { background: #ffc107; color: #111; }
-    .btn-danger { background: #dc3545; color: white; }
-    
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-collect { background: #28a745; color: white; }
+    .btn-print   { background: #007bff; color: white; }
+    .btn-refuse  { background: #dc3545; color: white; }
+    .btn-back    { background: none; border: none; color: #007bff; margin-top: 15px; cursor: pointer; font-weight: bold; }
+
+    select, textarea { width: 100%; padding: 14px; border: 1px solid #ddd; border-radius: 10px; font-size: 16px; box-sizing: border-box; margin-top: 10px; font-family: inherit; }
+
     .pill { display:inline-block; padding:4px 10px; border-radius:999px; background:#eee; font-size:10px; font-weight:700; margin-bottom:10px; text-transform: uppercase; }
     .debug { margin-top: 20px; font-size: 11px; color: #888; text-align: left; background: #eee; padding: 10px; border-radius: 8px; white-space: pre-wrap; font-family: monospace; }
+    .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #ccc; border-top-color: #333; border-radius: 50%; animation: spin 0.7s linear infinite; vertical-align: middle; margin-right: 6px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
@@ -39,30 +42,81 @@
 <div class="card">
   <div id="platformPill" class="pill">Detecting...</div>
 
-  <div id="printView" style="display:block;">
+  <!-- ============== SCREEN 1: LANDING (3 buttons) ============== -->
+  <div id="landingView" class="view active">
+    <div class="title">Specimen Portal</div>
+    <div class="patient-box">
+      <strong>Patient:</strong> <span id="L_name">—</span><br>
+      <strong>DOB:</strong> <span id="L_dob">—</span>
+    </div>
+    <div id="L_samples"></div>
+    <button id="btnGoCollect" class="btn btn-collect">🩸 Mark Collected</button>
+    <button id="btnGoPrint"   class="btn btn-print">🖨️ Print Labels</button>
+    <button id="btnGoRefuse"  class="btn btn-refuse">❌ Refused / Unable to Draw</button>
+  </div>
+
+  <!-- ============== SCREEN: COLLECT ============== -->
+  <div id="collectView" class="view">
+    <div class="title">Mark Collected</div>
+    <div class="patient-box">
+      <strong>Patient:</strong> <span id="C_name">—</span><br>
+      <strong>DOB:</strong> <span id="C_dob">—</span>
+    </div>
+    <div style="text-align:left; margin-bottom:8px; color:#666; font-size:13px;">
+      Check the samples that were collected:
+    </div>
+    <div id="C_samples"></div>
+    <button id="btnConfirmCollect" class="btn btn-collect">✅ Confirm Collection</button>
+    <button onclick="showView('landingView')" class="btn-back">← Back</button>
+  </div>
+
+  <!-- ============== SCREEN: REFUSE ============== -->
+  <div id="refuseView" class="view">
+    <div class="title">Refuse / Unable to Draw</div>
+    <div class="patient-box">
+      <strong>Patient:</strong> <span id="R_name">—</span><br>
+      <strong>DOB:</strong> <span id="R_dob">—</span>
+    </div>
+    <div style="text-align:left; margin-bottom:8px; color:#666; font-size:13px;">Reason:</div>
+    <select id="rejectionReason"><option value="">Loading reasons…</option></select>
+    <textarea id="rejectionNote" placeholder="Optional note (e.g. patient asleep, refused after explanation)" rows="3"></textarea>
+    <button id="btnConfirmRefuse" class="btn btn-refuse">❌ Confirm Refusal</button>
+    <button onclick="showView('landingView')" class="btn-back">← Back</button>
+  </div>
+
+  <!-- ============== SCREEN: PRINT ============== -->
+  <div id="printView" class="view">
     <div class="title">1. Verify & Print</div>
     <div class="patient-box">
-      <strong>Patient:</strong> <span id="name">—</span><br>
-      <strong>DOB:</strong> <span id="dob">—</span>
+      <strong>Patient:</strong> <span id="P_name">—</span><br>
+      <strong>DOB:</strong> <span id="P_dob">—</span>
     </div>
     <div id="labelPreview1"></div>
     <button id="printBtn" class="btn btn-print">🖨️ Print Labels</button>
+    <button onclick="showView('landingView')" class="btn-back">← Back</button>
   </div>
 
-  <div id="confirmView">
-    <div class="title">2. Final Collection</div>
+  <!-- ============== SCREEN: RECEIVED ============== -->
+  <div id="confirmView" class="view">
+    <div class="title">2. Mark Received</div>
     <div class="patient-box">
-      <strong>Patient:</strong> <span id="name2">—</span><br>
-      <strong>DOB:</strong> <span id="dob2">—</span>
+      <strong>Patient:</strong> <span id="V_name">—</span><br>
+      <strong>DOB:</strong> <span id="V_dob">—</span>
     </div>
     <div class="patient-box" style="border-left-color: #28a745;">
-        <strong>Confirm Samples Collected:</strong>
+        <strong>Confirm Samples Received:</strong>
         <div id="labelPreview2"></div>
     </div>
-    <button onclick="handleOutcome('SUCCESS')" class="btn btn-success">✅ Yes, Collected Checked</button>
-    <button onclick="handleOutcome('HANDWRITE')" class="btn btn-warn">✍️ Printer Failed (Hand-write)</button>
-    <button onclick="handleOutcome('REFUSED')" class="btn btn-danger">❌ Unable to Draw / Refused</button>
-    <button onclick="resetWorkflow()" style="background:none; border:none; color:#007bff; margin-top:15px; cursor:pointer; font-weight:bold;">← Go Back / Reprint</button>
+    <button id="btnMarkReceived" class="btn btn-collect">📦 Mark Received</button>
+    <button onclick="showView('printView')" class="btn-back">← Reprint Labels</button>
+  </div>
+
+  <!-- ============== SCREEN: DONE ============== -->
+  <div id="doneView" class="view">
+    <div style="font-size:64px;margin:30px 0;">✅</div>
+    <div class="title" id="doneTitle">Complete</div>
+    <p id="doneMsg" style="color:#666;"></p>
+    <p style="color:#999;font-size:13px;">This page will close automatically.</p>
   </div>
 
   <div id="debug" class="debug">System Ready.</div>
@@ -70,17 +124,15 @@
 
 <script>
 /* ============================================================
-   CONFIG
+   CONFIG — only non-secrets here. Real tokens live in Apps Script.
    ============================================================ */
-const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzFK7SvlJZhAi33E2knw3TNkppdpQsk0PO4TOewm-N9ZIpGZx4GmZm8EwCVFK7dikrMzg/exec"; 
-const IOS_MODE = "SHORTCUT"; // Options: "ARROWHEAD" or "SHORTCUT"
-const ANDROID_MODE = "ARROWHEAD";
+const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzFK7SvlJZhAi33E2knw3TNkppdpQsk0PO4TOewm-N9ZIpGZx4GmZm8EwCVFK7dikrMzg/exec";
 
-/* Windows: Zebra Browser Print local service.
-   Default endpoint listens on http://localhost:9100.
-   Install from: https://www.zebra.com/us/en/support-downloads/printer-software/printer-setup-utilities.html
-   Desktop printer (ZD411) uses the same mobile ZPL — content prints in the
-   corner of the 2.25"x1.25" label; no separate layout. */
+// Must match PORTAL_SHARED_SECRET in Apps Script Script Properties.
+// Not a real secret — just a "this is the portal calling" gate.
+const SHARED_SECRET = "REPLACE_WITH_RANDOM_STRING_MATCHING_APPS_SCRIPT";
+
+const IOS_MODE = "SHORTCUT"; // "ARROWHEAD" or "SHORTCUT"
 const BROWSER_PRINT_URL = "http://localhost:9100";
 
 const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
@@ -88,208 +140,378 @@ const isAndroid = () => /Android/i.test(navigator.userAgent);
 const isDesktop = () => !isIOS() && !isAndroid();
 
 let patientData = {};
-let zplByIndex = {}; // single ZPL layout used by iOS, Android, and Windows
+let zplByIndex = {};
+let rejectionReasons = [];
 
-/* Logic: Ignore index 0, Ignore last 2. Prefix SM2(FirstDigit)- */
 function convertBarcodeToOrderCode(barcode) {
-    if (!barcode || barcode.length < 5) return barcode;
-    const firstDigit = barcode.charAt(0);
-    const middlePart = barcode.substring(1, barcode.length - 2);
-    return `SM2${firstDigit}-${middlePart}`;
+  // Barcodes are <year-digit><7-digit-order-num><type-letter><sequence>
+  //   60007376Y1   → year=6, order=0007376 → SM26-0007376
+  //   60007376Y10  → year=6, order=0007376 → SM26-0007376  (handles seq ≥ 10)
+  //   70001234X1   → year=7, order=0001234 → SM27-0001234  (handles year roll)
+  if (!barcode) return "";
+  const m = String(barcode).match(/^(\d)(\d{7})/);
+  if (!m) return barcode;
+  return `SM2${m[1]}-${m[2]}`;
+}
+
+function showView(id) {
+  document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
+  document.getElementById(id).classList.add("active");
+  window.scrollTo(0, 0);
 }
 
 function init() {
-    const params = new URLSearchParams(window.location.hash.substring(1));
-    const rawItems = decodeURIComponent(params.get("items") || "");
-    const firstBarcode = rawItems.split("|")[0].split("*")[0];
+  const params = new URLSearchParams(window.location.hash.substring(1));
+  const rawItems = decodeURIComponent(params.get("items") || "");
+  const firstBarcode = rawItems.split("|")[0].split("*")[0];
 
-    document.getElementById("platformPill").innerText = isIOS() ? `iOS (${IOS_MODE})` : (isAndroid() ? "Android" : "Windows (Browser Print)");
+  document.getElementById("platformPill").innerText =
+    isIOS() ? `iOS (${IOS_MODE})` : (isAndroid() ? "Android" : "Windows");
 
-    patientData = {
-        name: decodeURIComponent(params.get("name") || ""),
-        dob: decodeURIComponent(params.get("dob") || ""),
-        order_code: convertBarcodeToOrderCode(firstBarcode),
-        items: rawItems.split("|"),
-        label: decodeURIComponent(params.get("label") || "").split("|"),
-        tests: decodeURIComponent(params.get("tests") || "").split("|"),
-        st: decodeURIComponent(params.get("st") || "").split("|"),
-        cb: params.get("cb") || "asana://"
-    };
+  patientData = {
+    name:        decodeURIComponent(params.get("name") || ""),
+    dob:         decodeURIComponent(params.get("dob") || ""),
+    order_code:  convertBarcodeToOrderCode(firstBarcode),
+    order_uuid:  decodeURIComponent(params.get("order_uuid") || ""),
+    phleb_email: decodeURIComponent(params.get("phleb") || ""),
+    phleb_name:  decodeURIComponent(params.get("phleb_name") || ""),
+    items:       rawItems.split("|"),
+    label:       decodeURIComponent(params.get("label") || "").split("|"),
+    tests:       decodeURIComponent(params.get("tests") || "").split("|"),
+    st:          decodeURIComponent(params.get("st") || "").split("|"),
+    cb:          params.get("cb") || "asana://"
+  };
 
-    if(!patientData.name) return;
-    document.getElementById("name").innerText = patientData.name;
-    document.getElementById("dob").innerText = patientData.dob;
-    document.getElementById("name2").innerText = patientData.name;
-    document.getElementById("dob2").innerText = patientData.dob;
-    
-    renderLists();
+  if (!patientData.name) return;
 
-    document.getElementById("printBtn").onclick = async () => {
-        await executePrint();
-        document.getElementById("printView").style.display = "none";
-        document.getElementById("confirmView").style.display = "block";
-        window.scrollTo(0,0);
-    };
+  ["L", "C", "R", "P", "V"].forEach(prefix => {
+    const n = document.getElementById(`${prefix}_name`); if (n) n.innerText = patientData.name;
+    const d = document.getElementById(`${prefix}_dob`);  if (d) d.innerText = patientData.dob;
+  });
+
+  renderLists();
+  wireButtons();
+  bootstrap();
+}
+
+async function bootstrap() {
+  try {
+    const r = await callBroker({ action: "bootstrap" });
+    if (r.ok && r.rejection_reasons) {
+      rejectionReasons = r.rejection_reasons;
+      const sel = document.getElementById("rejectionReason");
+      sel.innerHTML = '<option value="">— select reason —</option>' +
+        rejectionReasons.map(rr => `<option value="${rr.uuid}">${escapeHtml(rr.name)}</option>`).join("");
+    }
+  } catch (e) {
+    document.getElementById("rejectionReason").innerHTML = '<option value="">⚠️ Could not load reasons</option>';
+    log(`⚠️ Bootstrap failed: ${e.message}`);
+  }
+}
+
+function wireButtons() {
+  document.getElementById("btnGoCollect").onclick = () => showView("collectView");
+  document.getElementById("btnGoPrint").onclick   = () => showView("printView");
+  document.getElementById("btnGoRefuse").onclick  = () => showView("refuseView");
+  document.getElementById("btnConfirmCollect").onclick = onMarkCollected;
+  document.getElementById("btnConfirmRefuse").onclick  = onRefuse;
+  document.getElementById("btnMarkReceived").onclick   = onMarkReceived;
+  document.getElementById("printBtn").onclick = async () => {
+    // Mobile (Android/iOS): print = collection event.
+    // Push collection_date to Dendi BEFORE we navigate to the printer app —
+    // mobile print uses URL schemes that unload this page, which would cancel
+    // any in-flight fetch.
+    if (isIOS() || isAndroid()) {
+      const ok = await pushCollectionFromPrintScreen();
+      if (!ok) return; // pushCollection logs the error; don't print on failure
+    }
+    // All platforms: send to printer
+    await executePrint();
+    // Windows only: stay on the page and advance to Mark Received
+    // (mobile is mid-navigation to the printer app, no point showing anything)
+    if (isDesktop()) {
+      showView("confirmView");
+    }
+  };
+}
+
+/**
+ * Read v1 (print-screen) checkboxes and POST mark_collected to the broker.
+ * Returns true on success, false on failure (caller halts the print).
+ */
+async function pushCollectionFromPrintScreen() {
+  const collected = [], missed = [];
+  patientData.items.forEach((item, i) => {
+    if (!item) return;
+    const bc = item.split("*")[0];
+    const cb = document.getElementById(`check-v1-${i}`);
+    if (cb && cb.checked) collected.push(bc); else missed.push(bc);
+  });
+  if (collected.length === 0) {
+    log("⚠️ No samples checked — uncheck Print or check at least one sample.");
+    return false;
+  }
+  log(`🩸 Logging collection in Dendi for ${collected.length} sample(s)…`);
+  try {
+    const r = await callBroker({
+      action: "mark_collected",
+      order_code: patientData.order_code,
+      order_uuid: patientData.order_uuid || undefined,
+      phleb_email: patientData.phleb_email || undefined,
+      phleb_name: patientData.phleb_name || undefined,
+      collected_barcodes: collected,
+      missed_barcodes: missed,
+      when: new Date().toISOString()
+    });
+    if (!r.ok) {
+      log(`❌ Collection log failed: ${r.error || "unknown error"}`);
+      return false;
+    }
+    log(`✅ Collection logged. Sending to printer…`);
+    return true;
+  } catch (e) {
+    log(`❌ Collection log failed: ${e.message}`);
+    return false;
+  }
 }
 
 function renderLists() {
-    let uiHtml = "";
-    zplByIndex = {};
+  let landingHtml = "", collectHtml = "", printHtml = "";
+  zplByIndex = {};
 
-    patientData.items.forEach((item, i) => {
-        if (!item) return;
-        let [bc, qty] = item.split("*");
-        const lblType = (patientData.label[i] || "IH").toUpperCase();
-        const tst = patientData.tests[i] || "";
-        const stype = patientData.st[i] || "";
-        const isSO = lblType === "SO";
+  patientData.items.forEach((item, i) => {
+    if (!item) return;
+    const [bc, qty] = item.split("*");
+    const lblType = (patientData.label[i] || "IH").toUpperCase();
+    const tst = patientData.tests[i] || "";
+    const stype = patientData.st[i] || "";
+    const isSO = lblType === "SO";
 
-        // row helper
-        const row = (suffix) => `
-            <div class="labelRow ${isSO ? 'sendout' : ''}" onclick="toggleCheck(${i}, '${suffix}')">
-                <input type="checkbox" class="cb-input" id="check-${suffix}-${i}" checked onclick="event.stopPropagation(); syncChecks(${i}, '${suffix}')"> 
-                <div class="labelContent">
-                    <span class="labelTag ${isSO ? 'so' : 'ih'}">${lblType}</span>
-                    <div class="barcodeLine">${bc}</div>
-                    <div class="testsLine"><strong>${stype}</strong><br>${tst}</div>
-                </div>
-            </div>`;
-        
-        uiHtml += row('v1');
-        
-        const border = isSO ? 15 : 0;
-        zplByIndex[i] = `^XA^MMT^MNM^PR6^MD30^FO0,10^GB385,${border},${border}^FS^FO20,25^A0N,32,32^FD${patientData.name.substring(0,25)}^FS^FO20,55^A0N,28,28^FD${patientData.dob}^FS^FO20,78^BY2,2,80^BCN,80,Y,N,N^FD${bc}^FS^FO12,180^A0N,20,20^FD${stype.substring(0,30)}^FS^FO12,200^A0N,20,20^FB350,2,0,L,0^FD${tst.substring(0,60)}^FS^PQ${qty},0,1,Y^XZ\r\n`;
-    });
+    landingHtml += `
+      <div class="labelRow ${isSO ? 'sendout' : ''}" style="cursor:default;">
+        <div class="labelContent" style="pointer-events:auto;">
+          <span class="labelTag ${isSO ? 'so' : 'ih'}">${lblType}</span>
+          <div class="barcodeLine">${escapeHtml(bc)}</div>
+          <div class="testsLine"><strong>${escapeHtml(stype)}</strong><br>${escapeHtml(tst)}</div>
+        </div>
+      </div>`;
 
-    document.getElementById("labelPreview1").innerHTML = uiHtml;
-    // Map same HTML to View 2 but change IDs and toggle function source
-    document.getElementById("labelPreview2").innerHTML = uiHtml.replace(/check-v1-/g, 'check-v2-').replace(/toggleCheck\((.*), 'v1'\)/g, "toggleCheck($1, 'v2')").replace(/syncChecks\((.*), 'v1'\)/g, "syncChecks($1, 'v2')");
-}
+    const cbRow = (suffix) => `
+      <div class="labelRow ${isSO ? 'sendout' : ''}" onclick="toggleCheck(${i}, '${suffix}')">
+        <input type="checkbox" class="cb-input" id="check-${suffix}-${i}" checked onclick="event.stopPropagation(); syncChecks(${i}, '${suffix}')">
+        <div class="labelContent">
+          <span class="labelTag ${isSO ? 'so' : 'ih'}">${lblType}</span>
+          <div class="barcodeLine">${escapeHtml(bc)}</div>
+          <div class="testsLine"><strong>${escapeHtml(stype)}</strong><br>${escapeHtml(tst)}</div>
+        </div>
+      </div>`;
 
-/* Build ZPL only for items checked in the print view (v1) */
-function buildZplForChecked() {
-    let zpl = "";
-    let count = 0;
-    patientData.items.forEach((item, i) => {
-        if (!item) return;
-        const cb = document.getElementById(`check-v1-${i}`);
-        if (cb && cb.checked && zplByIndex[i]) {
-            zpl += zplByIndex[i];
-            count++;
-        }
-    });
-    return { zpl, count };
+    collectHtml += cbRow('c');
+    printHtml   += cbRow('v1');
+
+    const border = isSO ? 15 : 0;
+    zplByIndex[i] = `^XA^MMT^MNM^PR6^MD30^FO0,10^GB385,${border},${border}^FS^FO20,25^A0N,32,32^FD${patientData.name.substring(0,25)}^FS^FO20,55^A0N,28,28^FD${patientData.dob}^FS^FO20,78^BY2,2,80^BCN,80,Y,N,N^FD${bc}^FS^FO12,180^A0N,20,20^FD${stype.substring(0,30)}^FS^FO12,200^A0N,20,20^FB350,2,0,L,0^FD${tst.substring(0,60)}^FS^PQ${qty},0,1,Y^XZ\r\n`;
+  });
+
+  document.getElementById("L_samples").innerHTML = landingHtml;
+  document.getElementById("C_samples").innerHTML = collectHtml;
+  document.getElementById("labelPreview1").innerHTML = printHtml;
+  document.getElementById("labelPreview2").innerHTML = printHtml
+    .replace(/check-v1-/g, 'check-v2-')
+    .replace(/toggleCheck\((.*?), 'v1'\)/g, "toggleCheck($1, 'v2')")
+    .replace(/syncChecks\((.*?), 'v1'\)/g,  "syncChecks($1, 'v2')");
 }
 
 function toggleCheck(index, source) {
-    const cb = document.getElementById(`check-${source}-${index}`);
-    cb.checked = !cb.checked;
-    syncChecks(index, source);
+  const cb = document.getElementById(`check-${source}-${index}`);
+  cb.checked = !cb.checked;
+  syncChecks(index, source);
 }
-
 function syncChecks(index, source) {
-    const other = source === 'v1' ? 'v2' : 'v1';
-    const val = document.getElementById(`check-${source}-${index}`).checked;
-    document.getElementById(`check-${other}-${index}`).checked = val;
+  if (source === 'c') return;
+  const other = source === 'v1' ? 'v2' : 'v1';
+  const me   = document.getElementById(`check-${source}-${index}`);
+  const mate = document.getElementById(`check-${other}-${index}`);
+  if (me && mate) mate.checked = me.checked;
 }
 
-async function handleOutcome(status) {
-    const debugDiv = document.getElementById("debug");
-    let collected = [], missed = [];
-    patientData.items.forEach((item, i) => {
-        if (!item) return;
-        const stype = patientData.st[i] || "Sample";
-        if(document.getElementById(`check-v2-${i}`).checked) collected.push(stype);
-        else missed.push(stype);
+async function onMarkCollected() {
+  const btn = document.getElementById("btnConfirmCollect");
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>Saving...';
+
+  const collected = [], missed = [];
+  patientData.items.forEach((item, i) => {
+    if (!item) return;
+    const bc = item.split("*")[0];
+    const cb = document.getElementById(`check-c-${i}`);
+    if (cb && cb.checked) collected.push(bc); else missed.push(bc);
+  });
+
+  log(`🩸 Marking collected: ${collected.length} / ${patientData.items.filter(Boolean).length}`);
+  try {
+    const r = await callBroker({
+      action: "mark_collected",
+      order_code: patientData.order_code,
+      order_uuid: patientData.order_uuid || undefined,
+      phleb_email: patientData.phleb_email || undefined,
+      phleb_name: patientData.phleb_name || undefined,
+      collected_barcodes: collected,
+      missed_barcodes: missed,
+      when: new Date().toISOString()
     });
+    if (!r.ok) throw new Error(r.error || "Unknown error");
+    finishDone("Collection Logged", `${collected.length} sample(s) marked collected in Dendi.`);
+  } catch (e) {
+    btn.disabled = false; btn.innerHTML = '✅ Confirm Collection';
+    log(`❌ Mark Collected failed: ${e.message}`);
+  }
+}
 
-    // DISPLAY ORDER CODE IN DEBUG
-    debugDiv.innerText = `🔄 Syncing Order: ${patientData.order_code}\nOutcome: ${status}...`;
+async function onRefuse() {
+  const reasonUuid = document.getElementById("rejectionReason").value;
+  if (!reasonUuid) { log("⚠️ Pick a rejection reason first."); return; }
 
-    try {
-        await fetch(GOOGLE_SCRIPT_URL, {
-            method: "POST", mode: "no-cors",
-            body: JSON.stringify({ 
-                order_code: patientData.order_code, 
-                outcome: status,
-                collected: collected,
-                missed: missed
-            })
-        });
-        debugDiv.innerText = `✅ Asana Updated Successfully!\nOrder: ${patientData.order_code}`;
-    } catch (e) { 
-        debugDiv.innerText = `❌ Error updating Asana.\nOrder: ${patientData.order_code}\n${e.message}`; 
-    }
+  const btn = document.getElementById("btnConfirmRefuse");
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>Saving...';
 
-    setTimeout(() => { 
-        // On desktop, asana:// won't do anything useful — stay put.
-        if (isDesktop()) return;
-        window.location.href = (status === 'REFUSED') ? "asana://" : patientData.cb; 
-    }, 1200);
+  const note = document.getElementById("rejectionNote").value.trim();
+  log(`❌ Rejecting order in Dendi`);
+  try {
+    const r = await callBroker({
+      action: "refuse",
+      order_code: patientData.order_code,
+      order_uuid: patientData.order_uuid || undefined,
+      rejection_reason_uuid: reasonUuid,
+      rejection_note: note || undefined,
+      phleb_email: patientData.phleb_email || undefined,
+      phleb_name: patientData.phleb_name || undefined
+    });
+    if (!r.ok) throw new Error(r.error || r.reject_error || "Unknown error");
+    finishDone("Order Refused", "Order rejected in Dendi.");
+  } catch (e) {
+    btn.disabled = false; btn.innerHTML = '❌ Confirm Refusal';
+    log(`❌ Refuse failed: ${e.message}`);
+  }
+}
+
+async function onMarkReceived() {
+  const btn = document.getElementById("btnMarkReceived");
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>Saving...';
+
+  const received = [], missing = [];
+  patientData.items.forEach((item, i) => {
+    if (!item) return;
+    const bc = item.split("*")[0];
+    const cb = document.getElementById(`check-v2-${i}`);
+    if (cb && cb.checked) received.push(bc); else missing.push(bc);
+  });
+
+  log(`📦 Marking received: ${received.length} / ${patientData.items.filter(Boolean).length}`);
+  try {
+    const r = await callBroker({
+      action: "mark_received",
+      order_code: patientData.order_code,
+      order_uuid: patientData.order_uuid || undefined,
+      received_barcodes: received,
+      missing_barcodes: missing
+    });
+    if (!r.ok) throw new Error(r.error || r.receive_error || "Unknown error");
+    finishDone("Order Received", `${received.length} sample(s) marked received in Dendi.`);
+  } catch (e) {
+    btn.disabled = false; btn.innerHTML = '📦 Mark Received';
+    log(`❌ Mark Received failed: ${e.message}`);
+  }
+}
+
+function buildZplForChecked() {
+  let zpl = "", count = 0;
+  patientData.items.forEach((item, i) => {
+    if (!item) return;
+    const cb = document.getElementById(`check-v1-${i}`);
+    if (cb && cb.checked && zplByIndex[i]) { zpl += zplByIndex[i]; count++; }
+  });
+  return { zpl, count };
 }
 
 async function executePrint() {
-    const debugDiv = document.getElementById("debug");
+  const debugDiv = document.getElementById("debug");
+  const { zpl: finalZpl, count } = buildZplForChecked();
+  if (count === 0) { debugDiv.innerText = `⚠️ No labels selected — nothing sent to printer.`; return; }
 
-    const { zpl: finalZpl, count } = buildZplForChecked();
-    if (count === 0) { debugDiv.innerText = `⚠️ No labels selected — nothing sent to printer.`; return; }
-
-    // ---------- ANDROID ----------
-    if (isAndroid()) {
-        const b64 = btoa(finalZpl.replace(/[^\x00-\x7F]/g, "")).replace(/=/g, "_");
-        const returnUrl = window.location.href;
-        window.location.href = `intent://x-callback-url/zplcode?code=${b64}&x-success=${encodeURIComponent(returnUrl)}#Intent;scheme=arrowhead;package=com.mobiprintpro.retail.android;end`;
-        return;
+  if (isAndroid()) {
+    const b64 = btoa(finalZpl.replace(/[^\x00-\x7F]/g, "")).replace(/=/g, "_");
+    const returnUrl = window.location.href;
+    window.location.href = `intent://x-callback-url/zplcode?code=${b64}&x-success=${encodeURIComponent(returnUrl)}#Intent;scheme=arrowhead;package=com.mobiprintpro.retail.android;end`;
+    return;
+  }
+  if (isIOS()) {
+    const b64 = btoa(finalZpl.replace(/[^\x00-\x7F]/g, "")).replace(/=/g, "_");
+    const returnUrl = window.location.href;
+    if (IOS_MODE === "ARROWHEAD") {
+      window.location.href = `arrowhead://x-callback-url/zplcode?code=${encodeURIComponent(b64)}&x-success=${encodeURIComponent(returnUrl)}`;
+    } else {
+      window.location.href = "shortcuts://run-shortcut?name=SMSPrint&input=text&text=" + encodeURIComponent(window.location.hash.substring(1));
     }
-
-    // ---------- iOS ----------
-    if (isIOS()) {
-        const b64 = btoa(finalZpl.replace(/[^\x00-\x7F]/g, "")).replace(/=/g, "_");
-        const returnUrl = window.location.href;
-        if (IOS_MODE === "ARROWHEAD") {
-            window.location.href = `arrowhead://x-callback-url/zplcode?code=${encodeURIComponent(b64)}&x-success=${encodeURIComponent(returnUrl)}`;
-        } else {
-            window.location.href = "shortcuts://run-shortcut?name=SMSPrint&input=text&text=" + encodeURIComponent(window.location.hash.substring(1));
-        }
-        return;
-    }
-
-    // ---------- WINDOWS / DESKTOP via Zebra Browser Print ----------
-    // ZD411 with 2.25"x1.25" labels — same mobile ZPL prints in the corner, no scaling.
-    // Swap mark sensing (^MNM) for gap/web sensing (^MNW) — desktop label stock has
-    // gaps between labels, not black registration marks. Mobile ZPL is unchanged.
-    const winZpl = finalZpl.replace(/\^MNM/g, "^MNW");
-    debugDiv.innerText = `🖨️ Sending ${count} label(s) to Browser Print...`;
-    try {
-        // Find the default printer
-        const dRes = await fetch(`${BROWSER_PRINT_URL}/default?type=printer`, { method: "GET" });
-        if (!dRes.ok) throw new Error(`Browser Print not reachable (HTTP ${dRes.status})`);
-        const printer = await dRes.json();
-        if (!printer || !printer.uid) throw new Error("No default Zebra printer configured in Browser Print.");
-
-        // Send the ZPL
-        const wRes = await fetch(`${BROWSER_PRINT_URL}/write`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ device: printer, data: winZpl })
-        });
-        if (!wRes.ok) throw new Error(`Print failed (HTTP ${wRes.status})`);
-
-        debugDiv.innerText = `✅ Sent ${count} label(s) to: ${printer.name || printer.uid}`;
-    } catch (e) {
-        debugDiv.innerText =
-            `❌ Browser Print error: ${e.message}\n\n` +
-            `Fix:\n` +
-            `1. Install Zebra Browser Print (zebra.com → Support → Printer Software)\n` +
-            `2. Make sure the service is running (system tray)\n` +
-            `3. Set a default printer in Browser Print\n` +
-            `4. If page is HTTPS, trust the Browser Print cert at https://localhost:9101`;
-    }
+    return;
+  }
+  // Windows: ZD411 + Browser Print + gap sensing
+  const winZpl = finalZpl.replace(/\^MNM/g, "^MNW");
+  debugDiv.innerText = `🖨️ Sending ${count} label(s) to Browser Print...`;
+  try {
+    const dRes = await fetch(`${BROWSER_PRINT_URL}/default?type=printer`);
+    if (!dRes.ok) throw new Error(`Browser Print not reachable (HTTP ${dRes.status})`);
+    const printer = await dRes.json();
+    if (!printer || !printer.uid) throw new Error("No default Zebra printer configured.");
+    const wRes = await fetch(`${BROWSER_PRINT_URL}/write`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ device: printer, data: winZpl })
+    });
+    if (!wRes.ok) throw new Error(`Print failed (HTTP ${wRes.status})`);
+    debugDiv.innerText = `✅ Sent ${count} label(s) to: ${printer.name || printer.uid}`;
+  } catch (e) {
+    debugDiv.innerText =
+      `❌ Browser Print error: ${e.message}\n\n` +
+      `1. Install Zebra Browser Print\n` +
+      `2. Make sure the service is running\n` +
+      `3. Set a default printer in Browser Print\n` +
+      `4. If page is HTTPS, trust the cert at https://localhost:9101`;
+  }
 }
 
-function resetWorkflow() {
-    document.getElementById("confirmView").style.display = "none";
-    document.getElementById("printView").style.display = "block";
+async function callBroker(payload) {
+  payload.secret = SHARED_SECRET;
+  const r = await fetch(GOOGLE_SCRIPT_URL, {
+    method: "POST",
+    // Apps Script web apps don't accept Content-Type: application/json from
+    // browsers (CORS preflight fails). Use text/plain — server parses JSON.
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify(payload)
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+function finishDone(title, msg) {
+  document.getElementById("doneTitle").innerText = title;
+  document.getElementById("doneMsg").innerText   = msg;
+  showView("doneView");
+  log(`✅ ${title}`);
+
+  setTimeout(() => {
+    if (isDesktop()) {
+      window.close();
+      return;
+    }
+    window.location.href = patientData.cb || "asana://";
+  }, 1500);
+}
+
+function log(msg) { document.getElementById("debug").innerText = msg; }
+
+function escapeHtml(s) {
+  return String(s || "").replace(/[&<>"']/g, c => ({
+    '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
+  }[c]));
 }
 
 window.onload = init;
