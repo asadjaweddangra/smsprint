@@ -84,32 +84,22 @@
   </div>
 
   <!-- ============== SCREEN: PRINT ============== -->
+  <!-- ============== SCREEN: PRINT + MARK RECEIVED (combined) ============== -->
   <div id="printView" class="view">
-    <div class="title">1. Verify & Print</div>
+    <div class="title">Print & Receive</div>
     <div class="patient-box">
       <strong>Patient:</strong> <span id="P_name">—</span><br>
       <strong>DOB:</strong> <span id="P_dob">—</span><br>
       <strong>Order:</strong> <a id="P_order" target="_blank" rel="noopener">—</a>
     </div>
+    <div style="text-align:left; margin-bottom:8px; color:#666; font-size:13px;">
+      Uncheck any sample <strong>not</strong> received at the lab:
+    </div>
     <div id="labelPreview1"></div>
-    <button id="printBtn" class="btn btn-print">🖨️ Print Labels</button>
+    <button id="printBtn"        class="btn btn-print">🖨️ Print Labels</button>
+    <button id="btnMarkReceived" class="btn btn-collect" style="display:none;">📦 Mark Received</button>
+    <button id="btnReprint"      class="btn-back" style="display:none;" onclick="document.getElementById('printBtn').click()">↻ Reprint Labels</button>
     <button onclick="showView('landingView')" class="btn-back">← Back</button>
-  </div>
-
-  <!-- ============== SCREEN: RECEIVED ============== -->
-  <div id="confirmView" class="view">
-    <div class="title">2. Mark Received</div>
-    <div class="patient-box">
-      <strong>Patient:</strong> <span id="V_name">—</span><br>
-      <strong>DOB:</strong> <span id="V_dob">—</span><br>
-      <strong>Order:</strong> <a id="V_order" target="_blank" rel="noopener">—</a>
-    </div>
-    <div class="patient-box" style="border-left-color: #28a745;">
-        <strong>Confirm Samples Received:</strong>
-        <div id="labelPreview2"></div>
-    </div>
-    <button id="btnMarkReceived" class="btn btn-collect">📦 Mark Received</button>
-    <button onclick="showView('printView')" class="btn-back">← Reprint Labels</button>
   </div>
 
   <!-- ============== SCREEN: DONE ============== -->
@@ -127,7 +117,7 @@
 /* ============================================================
    CONFIG — only non-secrets here. Real tokens live in Apps Script.
    ============================================================ */
-const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwJCEfX1j22douukRy9uuEXEL9yM-QWYOa94tZk8S4KrzPvp-vispgFu6-gjCA6QYdlVw/exec";
+const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwcRQ900gWsl6NtchmAeYp9ZZVX0QhGbLObr8hlWGjYeDKY59rgf5ofybIsTU2PaKn7lg/exec";
 
 // Must match PORTAL_SHARED_SECRET in Apps Script Script Properties.
 // Not a real secret — just a "this is the portal calling" gate.
@@ -189,7 +179,7 @@ function init() {
     ? `https://sms.dendisoftware.com/orders/${encodeURIComponent(patientData.order_code)}/`
     : "";
 
-  ["L", "R", "P", "V"].forEach(prefix => {
+  ["L", "R", "P"].forEach(prefix => {
     const n = document.getElementById(`${prefix}_name`); if (n) n.innerText = patientData.name;
     const d = document.getElementById(`${prefix}_dob`);  if (d) d.innerText = patientData.dob;
     const o = document.getElementById(`${prefix}_order`);
@@ -212,7 +202,10 @@ function init() {
 async function bootstrap() {
   const sel = document.getElementById("rejectionReason");
   try {
-    const r = await callBroker({ action: "bootstrap" });
+    const r = await callBroker({
+      action: "bootstrap",
+      order_code: patientData.order_code || undefined
+    });
     if (r.ok && r.rejection_reasons && r.rejection_reasons.length) {
       rejectionReasons = r.rejection_reasons;
       sel.innerHTML = '<option value="">— select reason —</option>' +
@@ -225,6 +218,21 @@ async function bootstrap() {
       // r.ok === false → broker returned an error (typically Unauthorized or Dendi fetch failed)
       sel.innerHTML = '<option value="">⚠️ Broker error — see log</option>';
       log(`⚠️ Bootstrap broker error: ${r.error || "(unknown)"}`);
+    }
+
+    // Apply rejected-sample filter — hide rows for barcodes that have all panels rejected.
+    if (r.ok && r.rejected_barcodes && r.rejected_barcodes.length) {
+      patientData.rejected_barcodes = r.rejected_barcodes;
+      log(`ℹ️ ${r.rejected_barcodes.length} sample(s) already rejected — hidden from list: ${r.rejected_barcodes.join(", ")}`);
+      renderLists();   // re-render now that we know which barcodes to hide
+    }
+    if (r.ok && r.order_status) {
+      // Surface the order's overall status to the phleb so they don't proceed on a fully-rejected order
+      if (r.order_status === "Rejected") {
+        log(`⚠️ This order is already fully Rejected in Dendi.`);
+      } else if (r.received) {
+        log(`ℹ️ This order has already been received in Dendi.`);
+      }
     }
   } catch (e) {
     sel.innerHTML = '<option value="">⚠️ Could not reach broker</option>';
@@ -240,6 +248,10 @@ function wireButtons() {
       log("⚠️ Nothing checked. Use Refuse if no samples will be drawn.");
       return;
     }
+    // Reset to fresh print state: show Print, hide Mark Received + Reprint
+    document.getElementById("printBtn").style.display = "block";
+    document.getElementById("btnMarkReceived").style.display = "none";
+    document.getElementById("btnReprint").style.display = "none";
     showView("printView");
   };
   document.getElementById("btnGoRefuse").onclick = () => {
@@ -255,10 +267,13 @@ function wireButtons() {
   document.getElementById("printBtn").onclick = async () => {
     // All platforms: send to printer
     await executePrint();
-    // Windows only: stay on the page and advance to Mark Received
-    // (mobile is mid-navigation to the printer app, no point showing anything)
+    // Windows only: stay on the same screen and reveal Mark Received button
+    // (mobile is mid-navigation to the printer app via URL scheme — page unloads)
     if (isDesktop()) {
-      showView("confirmView");
+      document.getElementById("printBtn").style.display = "none";
+      document.getElementById("btnMarkReceived").style.display = "block";
+      document.getElementById("btnReprint").style.display = "block";
+      log("✓ Print sent. Verify samples received and click Mark Received.");
     }
   };
 }
@@ -297,9 +312,19 @@ function renderLists() {
   let landingHtml = "", printHtml = "";
   zplByIndex = {};
 
+  // Rejected barcodes (from bootstrap response) are hidden entirely so phlebs
+  // don't accidentally print labels or mark received for samples whose work
+  // is already abandoned in Dendi.
+  const rejectedSet = {};
+  (patientData.rejected_barcodes || []).forEach(bc => { rejectedSet[bc] = true; });
+
+  let visibleCount = 0;
   patientData.items.forEach((item, i) => {
     if (!item) return;
     const [bc, qty] = item.split("*");
+    if (rejectedSet[bc]) return;   // skip — all panels for this sample are rejected
+    visibleCount++;
+
     const lblType = (patientData.label[i] || "IH").toUpperCase();
     const tst = patientData.tests[i] || "";
     const stype = patientData.st[i] || "";
@@ -322,12 +347,17 @@ function renderLists() {
     zplByIndex[i] = `^XA^MMT^MNM^PR6^MD30^FO0,10^GB385,${border},${border}^FS^FO20,25^A0N,32,32^FD${patientData.name.substring(0,25)}^FS^FO20,55^A0N,28,28^FD${patientData.dob}^FS^FO20,78^BY2,2,80^BCN,80,Y,N,N^FD${bc}^FS^FO12,180^A0N,20,20^FD${stype.substring(0,30)}^FS^FO12,200^A0N,20,20^FB350,2,0,L,0^FD${tst.substring(0,60)}^FS^PQ${qty},0,1,Y^XZ\r\n`;
   });
 
-  document.getElementById("L_samples").innerHTML = landingHtml;
-  document.getElementById("labelPreview1").innerHTML = printHtml;
-  document.getElementById("labelPreview2").innerHTML = printHtml
-    .replace(/check-v1-/g, 'check-v2-')
-    .replace(/toggleCheck\((.*?), 'v1'\)/g, "toggleCheck($1, 'v2')")
-    .replace(/syncChecks\((.*?), 'v1'\)/g,  "syncChecks($1, 'v2')");
+  if (visibleCount === 0) {
+    const empty = `<div class="patient-box" style="border-left-color:#dc3545; background:#fff5f5;">
+      <strong>All samples on this order are already rejected in Dendi.</strong>
+      <div style="margin-top:6px; font-size:13px; color:#666;">No labels to print or samples to receive.</div>
+    </div>`;
+    document.getElementById("L_samples").innerHTML = empty;
+    document.getElementById("labelPreview1").innerHTML = empty;
+  } else {
+    document.getElementById("L_samples").innerHTML = landingHtml;
+    document.getElementById("labelPreview1").innerHTML = printHtml;
+  }
 }
 
 function toggleCheck(index, source) {
@@ -337,14 +367,14 @@ function toggleCheck(index, source) {
 }
 
 /**
- * 3-way mirror: keep landing (lnd), print (v1), and receive (v2) checkboxes
- * in sync. Phleb unchecks something on landing → print won't print it,
- * receive won't expect it.
+ * 2-way mirror: keep landing (lnd) and print/receive (v1) checkboxes in sync.
+ * Phleb unchecks something on landing → print won't print it, receive won't
+ * expect it. (Combined screen means only one set after landing.)
  */
 function syncChecks(index, source) {
   const me = document.getElementById(`check-${source}-${index}`);
   if (!me) return;
-  ["lnd", "v1", "v2"].filter(s => s !== source).forEach(s => {
+  ["lnd", "v1"].filter(s => s !== source).forEach(s => {
     const peer = document.getElementById(`check-${s}-${index}`);
     if (peer) peer.checked = me.checked;
   });
@@ -402,7 +432,7 @@ async function onMarkReceived() {
   patientData.items.forEach((item, i) => {
     if (!item) return;
     const bc = item.split("*")[0];
-    const cb = document.getElementById(`check-v2-${i}`);
+    const cb = document.getElementById(`check-v1-${i}`);
     if (cb && cb.checked) received.push(bc); else missing.push(bc);
   });
 
