@@ -194,9 +194,37 @@ function init() {
     }
   });
 
-  renderLists();
+  showLoadingState();
   wireButtons();
   bootstrap();
+}
+
+/**
+ * Show a "Verifying with Dendi…" placeholder in the sample slots and disable
+ * the Print/Refuse buttons until bootstrap returns. Prevents the race where a
+ * fast tap could send a Print before rejected samples have been filtered out.
+ */
+function showLoadingState() {
+  const loading = `<div style="padding:40px 20px; text-align:center; color:#666;">
+    <div class="spinner" style="width:28px; height:28px; margin:0 auto 12px;"></div>
+    <div style="font-size:14px;">Verifying samples with Dendi…</div>
+  </div>`;
+  document.getElementById("L_samples").innerHTML = loading;
+  document.getElementById("labelPreview1").innerHTML = loading;
+  ["btnGoPrint", "btnGoRefuse", "printBtn", "btnMarkReceived"].forEach(id => {
+    const b = document.getElementById(id);
+    if (b) b.disabled = true;
+  });
+}
+
+function enableMainButtons() {
+  ["btnGoPrint", "btnGoRefuse"].forEach(id => {
+    const b = document.getElementById(id);
+    if (b) b.disabled = false;
+  });
+  // printBtn enables when user reaches print screen; btnMarkReceived enables after print.
+  const printBtn = document.getElementById("printBtn");
+  if (printBtn) printBtn.disabled = false;
 }
 
 async function bootstrap() {
@@ -215,28 +243,34 @@ async function bootstrap() {
       sel.innerHTML = '<option value="">⚠️ No reasons configured in Dendi</option>';
       log("⚠️ Broker returned 0 rejection reasons. Add reasons in Dendi Admin.");
     } else {
-      // r.ok === false → broker returned an error (typically Unauthorized or Dendi fetch failed)
       sel.innerHTML = '<option value="">⚠️ Broker error — see log</option>';
       log(`⚠️ Bootstrap broker error: ${r.error || "(unknown)"}`);
     }
 
-    // Apply rejected-sample filter — hide rows for barcodes that have all panels rejected.
+    // Capture rejected_barcodes BEFORE rendering, so the first paint is correct.
     if (r.ok && r.rejected_barcodes && r.rejected_barcodes.length) {
       patientData.rejected_barcodes = r.rejected_barcodes;
       log(`ℹ️ ${r.rejected_barcodes.length} sample(s) already rejected — hidden from list: ${r.rejected_barcodes.join(", ")}`);
-      renderLists();   // re-render now that we know which barcodes to hide
     }
     if (r.ok && r.order_status) {
-      // Surface the order's overall status to the phleb so they don't proceed on a fully-rejected order
       if (r.order_status === "Rejected") {
         log(`⚠️ This order is already fully Rejected in Dendi.`);
       } else if (r.received) {
         log(`ℹ️ This order has already been received in Dendi.`);
       }
     }
+
+    // Now render the (filtered) list and enable buttons.
+    renderLists();
+    enableMainButtons();
   } catch (e) {
     sel.innerHTML = '<option value="">⚠️ Could not reach broker</option>';
     log(`⚠️ Bootstrap network error: ${e.message}`);
+    log("Falling back to URL data — rejected samples may not be filtered.");
+    // Graceful degradation: render with URL data only, but enable buttons so
+    // the phleb isn't locked out if the broker is briefly unreachable.
+    renderLists();
+    enableMainButtons();
   }
 }
 
