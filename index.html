@@ -201,8 +201,15 @@ function init() {
 
 /**
  * Show a "Verifying with Dendi…" placeholder in the sample slots and disable
- * the Print/Refuse buttons until bootstrap returns. Prevents the race where a
- * fast tap could send a Print before rejected samples have been filtered out.
+ * the landing-screen Print/Refuse buttons until bootstrap returns. Prevents
+ * the race where a fast tap could send a Print before rejected samples have
+ * been filtered out.
+ *
+ * NOTE: We only disable the LANDING-screen entry buttons (btnGoPrint /
+ * btnGoRefuse). The actual printBtn / btnMarkReceived live on the print
+ * screen, which can't be reached until the phleb gets past the landing
+ * gate. Disabling them too caused iPhone print to break because their
+ * disabled state could leak across screen transitions if bootstrap errored.
  */
 function showLoadingState() {
   const loading = `<div style="padding:40px 20px; text-align:center; color:#666;">
@@ -211,7 +218,7 @@ function showLoadingState() {
   </div>`;
   document.getElementById("L_samples").innerHTML = loading;
   document.getElementById("labelPreview1").innerHTML = loading;
-  ["btnGoPrint", "btnGoRefuse", "printBtn", "btnMarkReceived"].forEach(id => {
+  ["btnGoPrint", "btnGoRefuse"].forEach(id => {
     const b = document.getElementById(id);
     if (b) b.disabled = true;
   });
@@ -222,9 +229,6 @@ function enableMainButtons() {
     const b = document.getElementById(id);
     if (b) b.disabled = false;
   });
-  // printBtn enables when user reaches print screen; btnMarkReceived enables after print.
-  const printBtn = document.getElementById("printBtn");
-  if (printBtn) printBtn.disabled = false;
 }
 
 async function bootstrap() {
@@ -282,8 +286,11 @@ function wireButtons() {
       log("⚠️ Nothing checked. Use Refuse if no samples will be drawn.");
       return;
     }
-    // Reset to fresh print state: show Print, hide Mark Received + Reprint
-    document.getElementById("printBtn").style.display = "block";
+    // Reset to fresh print state: show & enable Print, hide Mark Received + Reprint
+    const pb = document.getElementById("printBtn");
+    pb.style.display = "block";
+    pb.disabled = false;                     // defensive: clear any stale disabled state
+    pb.innerHTML = "🖨️ Print Labels";       // also reset label in case of prior spinner
     document.getElementById("btnMarkReceived").style.display = "none";
     document.getElementById("btnReprint").style.display = "none";
     showView("printView");
@@ -301,13 +308,19 @@ function wireButtons() {
   document.getElementById("printBtn").onclick = async () => {
     // All platforms: send to printer
     await executePrint();
-    // Windows only: stay on the same screen and reveal Mark Received button
-    // (mobile is mid-navigation to the printer app via URL scheme — page unloads)
+
     if (isDesktop()) {
+      // Windows: stay on the page and advance UI to Mark Received in place.
       document.getElementById("printBtn").style.display = "none";
       document.getElementById("btnMarkReceived").style.display = "block";
       document.getElementById("btnReprint").style.display = "block";
       log("✓ Print sent. Verify samples received and click Mark Received.");
+    } else {
+      // Mobile (iPhone & Android): phleb is done after print. The iOS Shortcut
+      // (or Arrowhead) is now handling the print job in the background. Show a
+      // brief confirmation, then close/return to Asana — phleb has no Mark
+      // Received step on mobile (that's the lab tech's job on Windows).
+      finishDone("Labels Sent to Printer", "You can close this page.");
     }
   };
 }
